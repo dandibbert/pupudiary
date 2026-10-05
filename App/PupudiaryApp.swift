@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 @main struct PupudiaryApp: App {
     @StateObject private var model = AppModel()
@@ -11,7 +12,13 @@ import SwiftUI
                 .environment(\.locale, Locale(identifier: "zh_Hans_CN"))
                 .modifier(TestTypography(enabled: model.isUITesting && ProcessInfo.processInfo.arguments.contains("--large-type")))
                 .onChange(of: scenePhase) { _, phase in if phase == .active { model.reload() } }
-                .onOpenURL { url in if url.scheme == "pupudiary", url.host == "record" { model.showRecord = true } }
+                .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)) { _ in model.changed() }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification).receive(on: RunLoop.main)) { _ in model.changed() }
+                .onOpenURL { url in
+                    guard url.scheme == "pupudiary" else { return }
+                    if url.host == "record" { model.showRecord = true }
+                    if url.host == "home" { model.selectedTab = 0 }
+                }
         }
     }
 }
@@ -22,6 +29,11 @@ struct RootView: View {
             HomeView().tabItem { Label("今天", systemImage: "sun.max") }.tag(0)
             HistoryView().tabItem { Label("记录", systemImage: "calendar") }.tag(1)
             TrendsView().tabItem { Label("趋势", systemImage: "chart.bar.xaxis") }.tag(2)
+        }
+        .overlay(alignment: .top) {
+            if model.isLoading && model.entries.isEmpty {
+                ProgressView("正在读取手帐…").font(.caption).padding(12).background(PupuStyle.card, in: Capsule()).padding(.top, 8)
+            }
         }
         .sheet(isPresented: $model.showRecord) { RecordView(entry: nil) }
         .sheet(item: $model.editing) { entry in RecordView(entry: entry) }
@@ -92,11 +104,11 @@ struct HomeView: View {
                         Button { model.quickSave() } label: {
                             HStack { Image(systemName: "plus").font(.title3.weight(.bold)); Text("记下此刻").font(.headline); Spacer(); Image(systemName: "arrow.up.right") }
                                 .padding(.horizontal, 22).frame(minHeight: 60).foregroundStyle(PupuStyle.onGreen).background(PupuStyle.green, in: Capsule())
-                        }.accessibilityIdentifier("quick-save")
+                        }.disabled(model.isLoading).accessibilityIdentifier("quick-save")
                         HStack {
                             Text("只记时间，其他都可以晚点补").font(.caption).foregroundStyle(PupuStyle.muted)
                             Spacer()
-                            Button("详细记录") { model.showRecord = true }.font(.subheadline.weight(.semibold)).accessibilityIdentifier("open-record")
+                            Button(model.undoID == nil ? "详细记录" : "补充刚才记录") { model.openDetailedRecord() }.font(.subheadline.weight(.semibold)).disabled(model.isLoading).accessibilityIdentifier("open-record")
                         }
                     }
                     if let toast = model.toast {

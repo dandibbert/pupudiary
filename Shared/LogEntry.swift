@@ -97,35 +97,30 @@ struct LogEntry: Identifiable, Codable, Equatable, Sendable {
 /// suffix. Imports accept ISO 8601 timestamps with Z or an explicit UTC offset;
 /// local display and day grouping must use the viewer's Calendar/TimeZone.
 enum DiaryDate {
+    // One cached codec per process. Its lock protects every formatter/regex
+    // call across independent stores, widget intents, and concurrent tests.
+    private static let codec = CachedDateCodec()
+
     static func canonical(_ value: Date) -> Date {
         guard value.timeIntervalSince1970.isFinite else { return value }
         return Date(timeIntervalSince1970: (value.timeIntervalSince1970 * 1_000).rounded() / 1_000)
     }
 
     static func string(_ value: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: canonical(value))
+        codec.string(canonical(value))
     }
 
     static func parse(_ value: String) -> Date? {
-        // Requiring a timezone prevents silently treating a local wall time as UTC.
-        // Check the whole input, since Foundation can otherwise normalize an
-        // impossible date (for example February 30) instead of rejecting it.
-        let pattern = #"\A\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)\z"#
-        guard value.count <= 40, value.range(of: pattern, options: .regularExpression) != nil else { return nil }
-        let components = value.prefix(10).split(separator: "-").compactMap { Int($0) }
-        guard components.count == 3 else { return nil }
-        let year = components[0], month = components[1], day = components[2]
-        let leapYear = year % 400 == 0 || (year % 4 == 0 && year % 100 != 0)
-        let monthDays = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-        guard year >= 1, day <= monthDays[month - 1] else { return nil }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: value) { return canonical(date) }
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: value).map(canonical)
+        codec.parse(value).map(canonical)
+    }
+
+    /// Next local-day boundary, strictly after date. Uses Calendar rather than
+    /// adding 86,400 seconds, so spring/fall DST days and skipped midnight work.
+    static func nextMidnight(after date: Date = Date(), calendar: Calendar = .current) -> Date? {
+        guard date.timeIntervalSince1970.isFinite,
+              let day = calendar.dateInterval(of: .day, for: date),
+              day.end > date else { return nil }
+        return day.end
     }
 
     static func encoder() -> JSONEncoder {
@@ -149,5 +144,66 @@ enum DiaryDate {
             return date
         }
         return decoder
+    }
+}
+
+/// ISO8601DateFormatter has mutable configuration. All three cached instances
+/// remain private and are only accessed while holding lock; no formatter
+/// configuration changes after initialization. JSON coders are not shared.
+private final class CachedDateCodec: @unchecked Sendable {
+    private let lock = NSLock()
+    private let encoder: ISO8601DateFormatter
+    private let fractionalParser: ISO8601DateFormatter
+    private let wholeSecondParser: ISO8601DateFormatter
+    private let timestampPattern: NSRegularExpression?
+
+    init() {
+        let output = ISO8601DateFormatter()
+        output.timeZone = TimeZone(secondsFromGMT: 0)
+        output.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let fractional = ISO8601DateFormatter()
+        fractional.timeZone = TimeZone(secondsFromGMT: 0)
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let wholeSecond = ISO8601DateFormatter()
+        wholeSecond.timeZone = TimeZone(secondsFromGMT: 0)
+        wholeSecond.formatOptions = [.withInternetDateTime]
+        let pattern = #"\A\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)\z"#
+        encoder = output
+        fractionalParser = fractional
+        wholeSecondParser = wholeSecond
+        timestampPattern = try? NSRegularExpression(pattern: pattern)
+    }
+
+    func string(_ value: Date) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return encoder.string(from: value)
+    }
+
+    func parse(_ value: String) -> Date? {
+        guard value.count <= 40 else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        // Requiring an explicit timezone prevents a local wall time silently
+        // becoming UTC. Full-string matching also rejects trailing content.
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        guard timestampPattern?.firstMatch(in: value, range: range) != nil else { return nil }
+        let components = value.prefix(10).split(separator: "-").compactMap { Int($0) }
+        guard components.count == 3 else { return nil }
+        let year = components[0], month = components[1], day = components[2]
+        let leapYear = year % 400 == 0 || (year % 4 == 0 && year % 100 != 0)
+        let maximumDay: Int
+        switch month {
+        case 2: maximumDay = leapYear ? 29 : 28
+        case 4, 6, 9, 11: maximumDay = 30
+        default: maximumDay = 31
+        }
+        guard year >= 1, day <= maximumDay else { return nil }
+        // The validated grammar locates the only possible dot after seconds.
+        // Selecting a dedicated formatter avoids a failed parse followed by
+        // mutating formatter options for every whole-second timestamp.
+        return value.contains(".")
+            ? fractionalParser.date(from: value)
+            : wholeSecondParser.date(from: value)
     }
 }

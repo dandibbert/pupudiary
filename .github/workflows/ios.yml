@@ -19,136 +19,193 @@ concurrency:
 
 jobs:
   native-ios:
-    runs-on: macos-15
-    timeout-minutes: 45
+    name: Native iOS (${{ matrix.shard }})
+    runs-on: macos-15-intel
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: preview
+            device: iPhone 16 Pro
+            tests: |
+              PupudiaryUITests/PupudiaryUITests/test00CaptureNativeScreensForRecovery
+          - shard: quick
+            device: iPhone 16 Pro
+            tests: |
+              PupudiaryUITests/PupudiaryUITests/testQuickSaveAndUndo
+              PupudiaryUITests/PupudiaryUITests/testRapidRepeatedQuickSaveDoesNotDuplicate
+              PupudiaryUITests/PupudiaryUITests/testQuickSaveSurvivesBackgroundAndForeground
+              PupudiaryUITests/PupudiaryUITests/testSupplementAfterQuickSaveDoesNotDuplicate
+          - shard: records
+            device: iPhone 16 Pro
+            tests: |
+              PupudiaryUITests/PupudiaryUITests/testCancelThenReopenRecordDoesNotCreateEntry
+              PupudiaryUITests/PupudiaryUITests/testDetailedRecordSavesWithOptionalFieldsEmpty
+              PupudiaryUITests/PupudiaryUITests/testRecordKeyboardScrollAndNotePersistence
+          - shard: core
+            device: iPhone 16 Pro
+            tests: |
+              PupudiaryCoreTests
+          - shard: compact
+            device: iPhone SE (3rd generation)
+            tests: |
+              PupudiaryUITests/PupudiaryUITests/test00CaptureNativeScreensForRecovery
+          - shard: appearance
+            device: iPhone 16 Pro
+            tests: |
+              PupudiaryUITests/PupudiaryUITests/testNativeAppearanceAndSecondaryScreens
+    defaults:
+      run:
+        shell: bash
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
-      PUPU_SIMULATOR_OS: "18.6"
+      PUPU_SIM_NAME: ${{ matrix.device }}
+      PUPU_SHARD: ${{ matrix.shard }}
+      PUPU_TESTS: ${{ matrix.tests }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Record toolchain and available simulators
+      - name: Verify Intel toolchain, native runtime and export command syntax
+        id: device
         timeout-minutes: 3
         run: |
-          mkdir -p build/logs build/screenshots build/ipa
+          mkdir -p build/intel/logs build/intel/attachments
+          test "$(uname -m)" = x86_64
           test -d "$DEVELOPER_DIR"
-          xcodebuild -version | tee build/logs/xcode-version.txt
-          xcodebuild -showsdks | tee build/logs/sdks.txt
-          xcrun simctl list devices available --json > build/logs/simulators.json
-          xcrun simctl list runtimes --json > build/logs/runtimes.json
-          sw_vers | tee build/logs/macos-version.txt
+          uname -m | tee build/intel/logs/host-architecture.txt
+          sw_vers | tee build/intel/logs/macos-version.txt
+          xcodebuild -version | tee build/intel/logs/xcode-version.txt
+          xcrun simctl list devices available --json > build/intel/logs/simulators.json
+          xcrun simctl list runtimes --json > build/intel/logs/runtimes.json
+          # Verify against the selected Xcode's actual CLI help before using either command.
+          xcrun xcresulttool export attachments --help > build/intel/logs/attachment-export-help.txt 2>&1
+          cat build/intel/logs/attachment-export-help.txt
+          grep -q -- '--path' build/intel/logs/attachment-export-help.txt
+          grep -q -- '--output-path' build/intel/logs/attachment-export-help.txt
+          xcrun xcresulttool get test-results summary --help > build/intel/logs/test-summary-help.txt 2>&1
+          python3 - <<'PY'
+          import json, os
+          inventory = json.load(open('build/intel/logs/simulators.json'))
+          runtime = 'com.apple.CoreSimulator.SimRuntime.iOS-18-6'
+          matches = [d for d in inventory.get('devices', {}).get(runtime, [])
+                     if d.get('isAvailable') and d.get('name') == os.environ['PUPU_SIM_NAME']]
+          assert matches, 'Required ' + os.environ['PUPU_SIM_NAME'] + ' / iOS 18.6 is unavailable'
+          device = sorted(matches, key=lambda d: d['udid'])[0]
+          selected = {'device': device['name'], 'udid': device['udid'], 'runtime': runtime,
+                      'iOS': '18.6', 'host_architecture': 'x86_64', 'capture': 'Native iPhone Simulator XCTest', 'shard': os.environ['PUPU_SHARD']}
+          with open('build/intel/device.json', 'w') as f: json.dump(selected, f, indent=2)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f: print('udid=' + device['udid'], file=f)
+          print(json.dumps(selected, indent=2))
+          PY
 
-      - name: Test portable build and validation tooling
-        run: python3 scripts/test-build-tools.py
-
-      - name: Install XcodeGen and generate project
-        id: project
+      - name: Generate native app and XCTest project
+        timeout-minutes: 4
         run: |
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
-          xcodegen --version | tee build/logs/xcodegen-version.txt
           xcodegen generate
-          xcodebuild -list -project Pupudiary.xcodeproj | tee build/logs/project.txt
+          grep -q 'test00CaptureNativeScreensForRecovery' Tests/PupudiaryUITests.swift
+          xcodebuild -project Pupudiary.xcodeproj -scheme Pupudiary -showdestinations \
+            > build/intel/logs/destinations.txt 2>&1
+          cat build/intel/logs/destinations.txt
 
-      - name: Select actual Pro and compact iPhones on the configured runtime
-        id: devices
-        run: python3 scripts/select-simulators.py build/logs/simulators.json build/simulator-selection.json
-
-      - name: Build native simulator app
-        id: simulator_build
-        run: |
-          set -o pipefail
-          xcodebuild -project Pupudiary.xcodeproj -scheme Pupudiary \
-            -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO build \
-            2>&1 | tee build/logs/simulator-build.log
-
-      # Capture/upload early. Subsequent UI testing or device compilation cannot hide these artifacts.
-      - name: Capture native iPhone app screens
-        id: screenshots
-        timeout-minutes: 6
-        run: scripts/capture-screenshots.sh build/simulator-selection.json build/DerivedData/Build/Products/Debug-iphonesimulator/Pupudiary.app build/screenshots primary 2>&1 | tee build/logs/screenshots.log
-
-      - name: Upload native screenshots immediately
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-iphone-primary-preview
-          path: |
-            build/screenshots/
-            build/simulator-selection.json
-            build/logs/screenshots.log
-          if-no-files-found: warn
-          retention-days: 30
-
-      - name: Capture compact iPhone screens
-        id: compact_screenshots
-        timeout-minutes: 6
-        if: ${{ !cancelled() && steps.simulator_build.outcome == 'success' }}
-        run: scripts/capture-screenshots.sh build/simulator-selection.json build/DerivedData/Build/Products/Debug-iphonesimulator/Pupudiary.app build/screenshots compact 2>&1 | tee build/logs/compact-screenshots.log
-
-      - name: Capture dark, large text and secondary screens
-        timeout-minutes: 6
-        if: ${{ !cancelled() && steps.screenshots.outcome == 'success' }}
-        run: scripts/capture-screenshots.sh build/simulator-selection.json build/DerivedData/Build/Products/Debug-iphonesimulator/Pupudiary.app build/screenshots variants 2>&1 | tee build/logs/variant-screenshots.log
-
-      - name: Upload all native screenshot variants
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-iphone-screenshots
-          path: |
-            build/screenshots/
-            build/simulator-selection.json
-          if-no-files-found: warn
-          retention-days: 30
-
-      - name: Run core and UI tests
+      - name: Let XCTest boot, install and launch the native iPhone app
         id: tests
-        timeout-minutes: 10
-        if: ${{ !cancelled() && steps.screenshots.outcome == 'success' }}
+        timeout-minutes: 20
         run: |
           set -o pipefail
-          xcodebuild -project Pupudiary.xcodeproj -scheme Pupudiary -configuration Debug \
-            -destination 'platform=iOS Simulator,id=${{ steps.devices.outputs.primary_udid }}' \
-            -derivedDataPath build/DerivedData -resultBundlePath build/Pupudiary.xcresult \
-            -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO test \
-            2>&1 | tee build/logs/tests.log
+          tests=()
+          while IFS= read -r selected; do
+            [[ -z "$selected" ]] || tests+=("-only-testing:$selected")
+          done <<< "$PUPU_TESTS"
+          printf 'Selected test: %s\n' "${tests[@]}"
+          # xcodebuild owns simulator lifecycle. No manual simctl boot/status_bar/ui/terminate.
+          xcodebuild test -project Pupudiary.xcodeproj -scheme Pupudiary \
+            -configuration Debug -sdk iphonesimulator \
+            -destination 'platform=iOS Simulator,id=${{ steps.device.outputs.udid }},arch=x86_64' \
+            -destination-timeout 120 \
+            -derivedDataPath build/IntelDerivedData \
+            -resultBundlePath build/intel/Pupudiary-Intel.xcresult \
+            -parallel-testing-enabled NO \
+            "${tests[@]}" \
+            CODE_SIGNING_ALLOWED=NO ARCHS=x86_64 ONLY_ACTIVE_ARCH=YES \
+            2>&1 | tee build/intel/logs/xcodebuild-tests.log
 
-      - name: Upload Xcode logs and test results even after failure
+      - name: Export every available native attachment and test summary
+        id: export
+        if: always()
+        timeout-minutes: 3
+        run: |
+          mkdir -p build/intel/logs build/intel/attachments
+          RESULT=build/intel/Pupudiary-Intel.xcresult
+          if [[ ! -d "$RESULT" ]]; then
+            echo 'No xcresult bundle was produced; native launch success is not established.' | tee build/intel/logs/export.log
+            exit 1
+          fi
+          export_status=0
+          xcrun xcresulttool export attachments --path "$RESULT" \
+            --output-path build/intel/attachments 2>&1 | tee build/intel/logs/export.log || export_status=$?
+          # A summary/name mismatch never prevents available PNGs or full results uploading.
+          xcrun xcresulttool get test-results summary --path "$RESULT" \
+            > build/intel/test-summary.json 2> build/intel/logs/summary-export.log || true
+          cat > build/intel/attachments/PROVENANCE.txt <<'TXT'
+          Original native iPhone Simulator XCTest attachments. Actual device, OS and shard are in device.json.
+          Widget-preview images are app-hosted native views, not SpringBoard integration evidence.
+          Images are unresized. Artifact existence is not a test pass; inspect the test summary and actual pixels.
+          All exported attachments are retained even when human-readable attachment names differ.
+          TXT
+          python3 - <<'PY'
+          import json, struct
+          from pathlib import Path
+          root = Path('build/intel/attachments')
+          images = []
+          for image in sorted(root.rglob('*.png')):
+              try:
+                  with image.open('rb') as f: header = f.read(24)
+                  if header[:8] != b'\x89PNG\r\n\x1a\n': continue
+                  width, height = struct.unpack('>II', header[16:24])
+                  images.append({'file': str(image.relative_to(root)), 'width': width, 'height': height})
+              except (OSError, struct.error) as error:
+                  images.append({'file': str(image.relative_to(root)), 'inspection_error': str(error)})
+          (root / 'png-inventory.json').write_text(json.dumps(images, indent=2))
+          print(json.dumps(images, indent=2))
+          PY
+          exit "$export_status"
+
+      - name: Upload native Intel screenshots immediately
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: xcode-logs-and-tests
+          name: intel-native-xctest-screenshots-${{ matrix.shard }}
           path: |
-            build/logs/
-            build/Pupudiary.xcresult/
-            build/simulator-selection.json
+            build/intel/attachments/
+            build/intel/device.json
+            build/intel/test-summary.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Preserve full Intel test bundle and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: intel-xctest-results-and-logs-${{ matrix.shard }}
+          path: |
+            build/intel/Pupudiary-Intel.xcresult/
+            build/intel/logs/
+            build/intel/device.json
+            build/intel/test-summary.json
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Summarize verified stages
+      - name: Report native test and attachment outcomes
         if: always()
         env:
-          SIM_STATUS: ${{ steps.simulator_build.outcome }}
-          SCREEN_STATUS: ${{ steps.screenshots.outcome }}
           TEST_STATUS: ${{ steps.tests.outcome }}
-          DEVICE_NAME: ${{ steps.devices.outputs.primary_name }}
-          DEVICE_OS: ${{ steps.devices.outputs.primary_os }}
-          COMPACT_NAME: ${{ steps.devices.outputs.compact_name }}
-          COMPACT_OS: ${{ steps.devices.outputs.compact_os }}
+          EXPORT_STATUS: ${{ steps.export.outcome }}
         run: |
-          {
-            echo '## Pupudiary native iOS verification'
-            echo "- Simulator build: $SIM_STATUS"
-            echo "- Native app screenshots: $SCREEN_STATUS"
-            echo "- Unit / UI tests: $TEST_STATUS"
-            echo "- Unsigned IPA builds independently in the device-ipa job"
-            echo "- Primary: $DEVICE_NAME / iOS $DEVICE_OS"
-            echo "- Compact: $COMPACT_NAME / iOS $COMPACT_OS"
-            echo '- Widget preview screenshots are app-hosted previews, not SpringBoard integration evidence.'
-            echo '- The unsigned IPA is not installable until both app and extension are provisioned and signed.'
-            echo '- Real-device widget data sharing requires matching App Group entitlements in both profiles and signatures.'
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Intel iPhone Simulator XCTest result: $TEST_STATUS" >> "$GITHUB_STEP_SUMMARY"
+          echo "Native attachment export: $EXPORT_STATUS" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Target: ${{ matrix.device }} / iOS 18.6 / shard ${{ matrix.shard }}; widget preview is app-hosted.' >> "$GITHUB_STEP_SUMMARY"
 
   device-ipa:
     name: Unsigned device IPA

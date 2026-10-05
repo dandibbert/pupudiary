@@ -330,6 +330,32 @@ final class CoreTests: XCTestCase {
         XCTAssertNotNil(DiaryDate.parse("2028-02-29T12:00:00Z"))
     }
 
+    func testQuickLogIntentPersistsBeforeReturningWithUnknownOptionalDetails() async throws {
+        #if DEBUG && targetEnvironment(simulator)
+        let isolated = directory.appendingPathComponent("intent-only", isDirectory: true)
+        let url = try StorageLocation.database(in: isolated)
+        let reader = try DiaryStore(url: url)
+        let before = Date().addingTimeInterval(-1)
+        try await QuickLogIntent.$testingDirectory.withValue(isolated) {
+            _ = try await QuickLogIntent().perform()
+        }
+        let entries = try reader.entries()
+        XCTAssertEqual(entries.count, 1)
+        let entry = try XCTUnwrap(entries.first)
+        XCTAssertGreaterThanOrEqual(entry.occurredAt, before)
+        XCTAssertLessThanOrEqual(entry.occurredAt, Date().addingTimeInterval(1))
+        XCTAssertNil(entry.bristol)
+        XCTAssertNil(entry.color)
+        XCTAssertNil(entry.amount)
+        XCTAssertNil(entry.effort)
+        XCTAssertNil(entry.symptoms)
+        XCTAssertNil(entry.durationMinutes)
+        XCTAssertNil(entry.note)
+        #else
+        throw XCTSkip("Actual AppIntent execution requires iOS Simulator; this test does not claim App Group entitlement availability.")
+        #endif
+    }
+
     func testQuickLogIntentPersistsIntoIsolatedAppGroupAndOpenAppConnectionSeesIt() async throws {
         #if DEBUG && targetEnvironment(simulator)
         guard let sharedDirectory = StorageLocation.sharedDirectory else {
@@ -438,6 +464,114 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(summary.count, 2)
         XCTAssertEqual(summary.last, latest)
         XCTAssertThrowsError(try store.entries())
+    }
+
+    func testCachedDateCodecConcurrentlyPreservesOffsetsAndMilliseconds() {
+        let fixtures: [(input: String, expectedUTC: String)] = [
+            ("2026-11-01T01:30:00.123-04:00", "2026-11-01T05:30:00.123Z"),
+            ("2026-11-01T01:30:00.987-05:00", "2026-11-01T06:30:00.987Z"),
+            ("2026-10-05T19:10:00+08:00", "2026-10-05T11:10:00.000Z"),
+            ("2028-02-29T12:34:56.789Z", "2028-02-29T12:34:56.789Z")
+        ]
+        let results = ConcurrentResults()
+        DispatchQueue.concurrentPerform(iterations: 512) { index in
+            let fixture = fixtures[index % fixtures.count]
+            guard let parsed = DiaryDate.parse(fixture.input) else {
+                results.add(NSError(domain: "DateCodecTest", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not parse \(fixture.input)"]))
+                return
+            }
+            let formatted = DiaryDate.string(parsed)
+            if formatted != fixture.expectedUTC || DiaryDate.parse(formatted) != parsed {
+                results.add(NSError(domain: "DateCodecTest", code: 2, userInfo: [NSLocalizedDescriptionKey: "Concurrent roundtrip changed \(fixture.input) to \(formatted)"]))
+            }
+            if DiaryDate.parse("2026-02-30T12:00:00Z") != nil {
+                results.add(NSError(domain: "DateCodecTest", code: 3, userInfo: [NSLocalizedDescriptionKey: "Impossible date accepted during concurrent parsing"]))
+            }
+        }
+        XCTAssertTrue(results.errors.isEmpty, results.errors.joined(separator: "\n"))
+    }
+
+    func testMaximumEntryBackupFixtureRoundTripsWithinSupportedByteLimit() throws {
+        // Exercise the supported record limit once, rather than repeating a
+        // large performance measure ten times or enforcing a flaky time cap.
+        // Mostly timestamp-only rows with occasional realistic details reflect
+        // years of use; the fixture is generated and contains no user data.
+        let started = ProcessInfo.processInfo.systemUptime
+        let count = DiaryStore.maximumBackupEntries
+        var fixture: [LogEntry] = []
+        fixture.reserveCapacity(count)
+        for index in 0..<count {
+            let fractionalSecond = Double(index % 1_000) / 1_000
+            let occurred = epoch.addingTimeInterval(-Double(index) * 6 * 3_600 + fractionalSecond)
+            var entry = LogEntry(occurredAt: occurred, createdAt: epoch, updatedAt: epoch)
+            if index % 10 == 0 {
+                entry.bristol = 4
+                entry.color = "棕色"
+                entry.amount = "适中"
+                entry.effort = "轻松"
+                entry.symptoms = index % 20 == 0 ? [] : ["腹胀"]
+                entry.durationMinutes = 3
+                entry.note = "Breakfast, then a quiet moment."
+            }
+            if index % 17 == 0 {
+                entry.updatedAt = epoch.addingTimeInterval(60)
+                entry.deletedAt = entry.updatedAt
+            }
+            fixture.append(entry)
+        }
+        let data = try backup(fixture)
+        XCTAssertEqual(fixture.count, 25_000)
+        XCTAssertGreaterThan(data.count, 1_024 * 1_024)
+        XCTAssertLessThanOrEqual(data.count, DiaryStore.maximumBackupBytes)
+        let store = try DiaryStore(url: databaseURL)
+        let preview = store.validateBackup(data)
+        XCTAssertTrue(preview.isValid, preview.errors.joined(separator: "\n"))
+        XCTAssertEqual(preview.entryCount, count)
+        XCTAssertEqual(preview.newCount, count)
+        let result = try store.mergeJSON(data)
+        XCTAssertEqual(result.insertedCount, count)
+        XCTAssertEqual(result.skippedCount, 0)
+        let exported = try store.exportJSON()
+        XCTAssertLessThanOrEqual(exported.count, DiaryStore.maximumBackupBytes)
+        let restored = try DiaryDate.decoder().decode(DiaryBackup.self, from: exported)
+        XCTAssertEqual(restored.entries.count, fixture.count)
+        for index in fixture.indices {
+            guard restored.entries.indices.contains(index) else { break }
+            if restored.entries[index] != fixture[index] {
+                XCTFail("Maximum-entry backup changed record at index \(index)")
+                break
+            }
+        }
+        let first = try XCTUnwrap(restored.entries.first)
+        let second = try XCTUnwrap(restored.entries.dropFirst().first)
+        XCTAssertNil(second.symptoms)
+        XCTAssertEqual(first.symptoms, [])
+        XCTAssertNotNil(first.deletedAt)
+        let elapsed = ProcessInfo.processInfo.systemUptime - started
+        let measurement = XCTAttachment(string: "Generated backup fixture: \(count) records, \(data.count) input bytes, \(exported.count) exported bytes. Encode + validation + SQLite restore + export + decode elapsed: \(elapsed) seconds. No fixed timing threshold.")
+        measurement.name = "Maximum-entry backup performance fixture"
+        measurement.lifetime = .keepAlways
+        add(measurement)
+    }
+
+    func testNextMidnightUsesLocalBoundariesThroughDSTAndEndOfDay() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        let fixtures: [(start: String, end: String, hours: Double)] = [
+            ("2026-03-08T00:00:00-05:00", "2026-03-09T00:00:00-04:00", 23),
+            ("2026-11-01T00:00:00-04:00", "2026-11-02T00:00:00-05:00", 25)
+        ]
+        for fixture in fixtures {
+            let start = try XCTUnwrap(DiaryDate.parse(fixture.start))
+            let end = try XCTUnwrap(DiaryDate.parse(fixture.end))
+            XCTAssertEqual(DiaryDate.nextMidnight(after: start, calendar: calendar), end)
+            XCTAssertEqual(end.timeIntervalSince(start), fixture.hours * 3_600)
+            XCTAssertEqual(DiaryDate.nextMidnight(after: end.addingTimeInterval(-0.001), calendar: calendar), end)
+            let following = try XCTUnwrap(DiaryDate.nextMidnight(after: end, calendar: calendar))
+            XCTAssertGreaterThan(following, end, "At midnight, schedule the following day rather than immediately firing again")
+            XCTAssertEqual(following.timeIntervalSince(end), 24 * 3_600)
+        }
+        XCTAssertNil(DiaryDate.nextMidnight(after: Date(timeIntervalSince1970: .infinity), calendar: calendar))
     }
 }
 

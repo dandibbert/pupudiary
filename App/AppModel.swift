@@ -4,6 +4,8 @@ import UserNotifications
 
 @MainActor final class AppModel: ObservableObject {
     @Published var entries: [LogEntry] = []
+    @Published var isLoading = false
+    private var reloadGeneration = 0
     @Published var error: String?
     @Published var toast: String?
     @Published var undoID: UUID?
@@ -18,10 +20,10 @@ import UserNotifications
     let isUITesting: Bool
     let isUnitTesting: Bool
     var today: [LogEntry] { entries.filter { Calendar.current.isDateInToday($0.occurredAt) } }
-    init() {
+    init(testingDirectory: URL? = nil) {
         #if targetEnvironment(simulator)
         isUITesting = ProcessInfo.processInfo.arguments.contains("--uitesting")
-        isUnitTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        isUnitTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil || testingDirectory != nil
         #else
         isUITesting = false
         isUnitTesting = false
@@ -30,7 +32,7 @@ import UserNotifications
             sharedAvailable = StorageLocation.sharedDirectory != nil
             let directory: URL
             if isUITesting || isUnitTesting {
-                directory = FileManager.default.temporaryDirectory.appendingPathComponent("pupu-ui-\(UUID().uuidString)")
+                directory = testingDirectory ?? FileManager.default.temporaryDirectory.appendingPathComponent("pupu-ui-\(UUID().uuidString)")
             } else {
                 if !sharedAvailable && UserDefaults.standard.bool(forKey: "hasUsedSharedStorage") {
                     throw NSError(domain: "Pupudiary", code: 1, userInfo: [NSLocalizedDescriptionKey: "原来的共享手帐暂时无法访问。为避免生成不一致的数据，请恢复带 App Group 的签名后重试。"])
@@ -41,16 +43,21 @@ import UserNotifications
             if !isUITesting, !isUnitTesting, sharedAvailable {
                 UserDefaults.standard.set(true, forKey: "hasUsedSharedStorage")
                 StorageLocation.sharedPreferences?.set(discreet, forKey: "discreet")
-                if !UserDefaults.standard.bool(forKey: "privateMigrationCompleted") {
-                    do {
-                        let oldURL = StorageLocation.privateDirectory.appendingPathComponent("diary.sqlite")
-                        if FileManager.default.fileExists(atPath: oldURL.path) {
-                            let old = try DiaryStore(url: oldURL)
-                            _ = try store?.mergeJSON(old.exportJSON())
-                        }
-                        UserDefaults.standard.set(true, forKey: "privateMigrationCompleted")
-                    } catch {
-                        self.error = "当前手帐仍可使用，旧的本机记录尚未迁移：\(error.localizedDescription)"
+                if !UserDefaults.standard.bool(forKey: "privateMigrationCompleted"), let store {
+                    let oldURL = StorageLocation.privateDirectory.appendingPathComponent("diary.sqlite")
+                    Task { [weak self] in
+                        let warning = await Task.detached(priority: .userInitiated) { () -> String? in
+                            do {
+                                if FileManager.default.fileExists(atPath: oldURL.path) {
+                                    let old = try DiaryStore(url: oldURL)
+                                    _ = try store.mergeJSON(old.exportJSON())
+                                }
+                                UserDefaults.standard.set(true, forKey: "privateMigrationCompleted")
+                                return nil
+                            } catch { return error.localizedDescription }
+                        }.value
+                        if let warning { self?.error = "当前手帐仍可使用，旧的本机记录尚未迁移：\(warning)" }
+                        await self?.reloadAsync()
                     }
                 }
             }
@@ -67,8 +74,30 @@ import UserNotifications
             }
         } catch { self.error = "手帐暂时无法打开：\(error.localizedDescription)" }
     }
-    func reload() {
-        do { entries = try store?.entries() ?? [] } catch { self.error = "读取失败：\(error.localizedDescription)" }
+    func reload() { Task { await reloadAsync() } }
+    func reloadAsync() async {
+        guard let store else { return }
+        reloadGeneration += 1
+        let generation = reloadGeneration
+        isLoading = true
+        let result = await Task.detached(priority: .userInitiated) { () -> Result<[LogEntry], Error> in
+            Result { try store.entries() }
+        }.value
+        guard generation == reloadGeneration else { return }
+        isLoading = false
+        switch result {
+        case .success(let records): entries = records
+        case .failure(let failure): error = "读取失败：\(failure.localizedDescription)"
+        }
+    }
+    func openDetailedRecord() {
+        if let id = undoID {
+            guard let entry = entries.first(where: { $0.id == id }) else {
+                error = "记录正在更新，请稍候再补充"
+                return
+            }
+            editing = entry
+        } else { showRecord = true }
     }
     func changed() { reload(); WidgetCenter.shared.reloadAllTimelines() }
     func quickSave() {
@@ -96,7 +125,7 @@ import UserNotifications
     }
     func delete(_ entry: LogEntry) -> Bool {
         guard let store else { error = "存储暂不可用"; return false }
-        do { try store.softDelete(id: entry.id); toast = "移入最近删除，随时可以恢复"; changed(); return true }
+        do { try store.softDelete(id: entry.id); undoID = nil; toast = "移入最近删除，随时可以恢复"; changed(); return true }
         catch { self.error = error.localizedDescription; return false }
     }
     func setDiscreet(_ value: Bool) {

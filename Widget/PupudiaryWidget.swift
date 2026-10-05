@@ -13,18 +13,24 @@ struct DiaryProvider: TimelineProvider {
     func placeholder(in context: Context) -> DiaryTimelineEntry { DiaryTimelineEntry(date: Date(), count: 0, last: nil, sharedAvailable: true, discreet: false, error: false) }
     func getSnapshot(in context: Context, completion: @escaping (DiaryTimelineEntry) -> Void) { completion(read()) }
     func getTimeline(in context: Context, completion: @escaping (Timeline<DiaryTimelineEntry>) -> Void) {
-        let entry = read()
-        let next = Calendar.current.date(byAdding: .minute, value: 15, to: Date())!
-        completion(Timeline(entries: [entry], policy: .after(next)))
+        let now = Date()
+        let entry = read(at: now)
+        let refresh = now.addingTimeInterval(15 * 60)
+        guard let midnight = DiaryDate.nextMidnight(after: now) else {
+            completion(Timeline(entries: [entry], policy: .after(refresh)))
+            return
+        }
+        // A precomputed boundary entry switches the displayed day even if iOS delays a refresh.
+        completion(Timeline(entries: [entry, read(at: midnight)], policy: .after(min(refresh, midnight))))
     }
-    private func read() -> DiaryTimelineEntry {
+    private func read(at date: Date = Date()) -> DiaryTimelineEntry {
         let discreet = StorageLocation.sharedPreferences?.bool(forKey: "discreet") ?? false
-        guard let directory = StorageLocation.sharedDirectory else { return DiaryTimelineEntry(date: Date(), count: 0, last: nil, sharedAvailable: false, discreet: true, error: false) }
+        guard let directory = StorageLocation.sharedDirectory else { return DiaryTimelineEntry(date: date, count: 0, last: nil, sharedAvailable: false, discreet: true, error: false) }
         do {
             let store = try DiaryStore(url: StorageLocation.database(in: directory))
-            let summary = try store.summary()
-            return DiaryTimelineEntry(date: Date(), count: summary.count, last: summary.last?.occurredAt, sharedAvailable: true, discreet: discreet, error: false)
-        } catch { return DiaryTimelineEntry(date: Date(), count: 0, last: nil, sharedAvailable: false, discreet: true, error: true) }
+            let summary = try store.summary(on: date)
+            return DiaryTimelineEntry(date: date, count: summary.count, last: summary.last?.occurredAt, sharedAvailable: true, discreet: discreet, error: false)
+        } catch { return DiaryTimelineEntry(date: date, count: 0, last: nil, sharedAvailable: false, discreet: true, error: true) }
     }
 }
 struct DiaryWidgetView: View {

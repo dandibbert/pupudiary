@@ -1,10 +1,13 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import UserNotifications
+import WidgetKit
 
+@MainActor
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("reminderEnabled") private var reminderEnabled = false
     @AppStorage("reminderHour") private var reminderHour = 20
     @AppStorage("reminderMinute") private var reminderMinute = 0
@@ -14,7 +17,12 @@ struct SettingsView: View {
     @State private var importSummary = ""
     @State private var confirmImport = false
     @State private var share: ShareFile?
-    @State private var busy = false
+    @State private var dataBusy = false
+    @State private var reminderBusy = false
+    private var busy: Bool { dataBusy || reminderBusy }
+    @State private var busyMessage = "正在处理…"
+    @State private var reminderTask: Task<Void, Never>?
+    @State private var reminderRevision = UUID()
     @State private var localError: String?
     var body: some View {
         NavigationStack {
@@ -30,11 +38,7 @@ struct SettingsView: View {
                 Section {
                     Toggle("每天温柔提醒一次", isOn: Binding(get: { reminderEnabled }, set: setReminder))
                     if reminderEnabled {
-                        DatePicker("提醒时间", selection: $reminderTime, displayedComponents: .hourAndMinute)
-                            .onChange(of: reminderTime) { _, value in
-                                reminderHour = Calendar.current.component(.hour, from: value); reminderMinute = Calendar.current.component(.minute, from: value)
-                                Task { await scheduleReminder() }
-                            }
+                        DatePicker("提醒时间", selection: Binding(get: { reminderTime }, set: setReminderTime), displayedComponents: .hourAndMinute)
                     }
                 } header: { Text("提醒") } footer: { Text("默认关闭。通知只在本机安排，内容不会显示记录详情。") }
                 Section {
@@ -53,7 +57,18 @@ struct SettingsView: View {
             }.scrollContentBackground(.hidden).paper().navigationTitle("我的手帐").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
             .disabled(busy)
-            .onAppear { reminderTime = Calendar.current.date(bySettingHour: reminderHour, minute: reminderMinute, second: 0, of: Date()) ?? Date() }
+            .overlay {
+                if busy {
+                    ProgressView(busyMessage).padding(22)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+                        .accessibilityIdentifier("settings-progress")
+                }
+            }
+            .onAppear {
+                reminderTime = Calendar.current.date(bySettingHour: reminderHour, minute: reminderMinute, second: 0, of: Date()) ?? Date()
+                refreshReminderStatus()
+            }
+            .onChange(of: scenePhase) { _, phase in if phase == .active { refreshReminderStatus() } }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.json], allowsMultipleSelection: false, onCompletion: readImport)
             .sheet(item: $share) { file in ActivitySheet(url: file.url) }
             .alert("恢复备份", isPresented: $confirmImport) {
@@ -61,63 +76,179 @@ struct SettingsView: View {
                 Button("添加新记录") { restore() }
             } message: { Text(importSummary) }
             .alert("请检查一下", isPresented: Binding(get: { localError != nil }, set: { if !$0 { localError = nil } })) { Button("知道了", role: .cancel) {} } message: { Text(localError ?? "") }
-        }
+        }.interactiveDismissDisabled(busy)
     }
     private func export(json: Bool) {
-        do {
-            guard let store = model.store else { return }
-            let data = try json ? store.exportJSON() : store.exportCSV()
-            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("PupudiaryExports", isDirectory: true)
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let name = "Pupudiary-\(Date().formatted(.iso8601.year().month().day().dateSeparator(.dash)))" + (json ? ".json" : ".csv")
-            let url = folder.appendingPathComponent(name)
-            try data.write(to: url, options: [.atomic, .completeFileProtection])
-            share = ShareFile(url: url)
-        } catch { localError = "导出失败：\(error.localizedDescription)" }
-    }
-    private func readImport(_ result: Result<[URL], Error>) {
-        do {
-            guard let url = try result.get().first, let store = model.store else { return }
-            let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
-            let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-            guard size <= 10 * 1024 * 1024 else { localError = "备份过大，请选择 10 MB 以内的 JSON 备份"; return }
-            let handle = try FileHandle(forReadingFrom: url)
-            defer { try? handle.close() }
-            let data = try handle.read(upToCount: 10 * 1024 * 1024 + 1) ?? Data()
-            guard data.count <= 10 * 1024 * 1024 else { localError = "备份超过 10 MB，无法导入"; return }
-            let validation = store.validateBackup(data)
-            guard validation.isValid else { localError = "这份备份无法导入：\n" + validation.errors.prefix(3).joined(separator: "\n"); return }
-            importData = data
-            importSummary = "已检查 \(validation.entryCount) 条记录。将添加 \(validation.newCount) 条，跳过 \(validation.existingCount) 条已有记录。现有内容不会被覆盖。"
-            confirmImport = true
-        } catch { localError = "无法读取备份：\(error.localizedDescription)" }
-    }
-    private func restore() {
-        guard let data = importData, let store = model.store else { localError = "存储暂不可用，尚未导入"; return }
-        do {
-            let result = try store.mergeJSON(data)
-            model.changed(); importData = nil
-            localError = "恢复完成：添加 \(result.insertedCount) 条，保留原有 \(result.skippedCount) 条"
-        } catch { localError = "没有导入任何记录：\(error.localizedDescription)" }
-    }
-    private func setReminder(_ value: Bool) {
-        if !value { reminderEnabled = false; UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["pupudiary.daily"]); return }
-        busy = true
-        Task {
+        guard !busy else { return }
+        guard let store = model.store else { localError = "存储暂不可用，无法导出"; return }
+        dataBusy = true
+        busyMessage = "正在准备导出…"
+        Task { @MainActor in
+            defer { dataBusy = false }
             do {
-                let allowed = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
-                reminderEnabled = allowed
-                if allowed { await scheduleReminder() } else { localError = "通知权限未开启。你可以在 iPhone 设置中为噗噗手帐开启通知。" }
-            } catch { localError = error.localizedDescription }
-            busy = false
+                let url = try await Task.detached(priority: .userInitiated) {
+                    let data = try json ? store.exportJSON() : store.exportCSV()
+                    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("PupudiaryExports", isDirectory: true)
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    let name = "Pupudiary-\(Date().formatted(.iso8601.year().month().day().dateSeparator(.dash)))" + (json ? ".json" : ".csv")
+                    let url = folder.appendingPathComponent(name)
+                    try data.write(to: url, options: [.atomic, .completeFileProtection])
+                    return url
+                }.value
+                share = ShareFile(url: url)
+            } catch { localError = "导出失败：\(error.localizedDescription)" }
         }
     }
-    private func scheduleReminder() async {
-        guard reminderEnabled else { return }
-        let content = UNMutableNotificationContent(); content.title = "留一点时间给自己"; content.body = "想记的时候，来噗噗手帐坐坐。"; content.sound = .default
-        let trigger = UNCalendarNotificationTrigger(dateMatching: DateComponents(hour: reminderHour, minute: reminderMinute), repeats: true)
-        do { try await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "pupudiary.daily", content: content, trigger: trigger)) }
-        catch { reminderEnabled = false; localError = "提醒未保存：\(error.localizedDescription)" }
+    private func readImport(_ result: Result<[URL], Error>) {
+        guard !dataBusy else { return }
+        let url: URL
+        do {
+            guard let selected = try result.get().first else { return }
+            url = selected
+        } catch {
+            if (error as? CocoaError)?.code != .userCancelled {
+                localError = "无法读取备份：\(error.localizedDescription)"
+            }
+            return
+        }
+        guard let store = model.store else { localError = "存储暂不可用，无法导入"; return }
+        dataBusy = true
+        busyMessage = "正在检查备份…"
+        Task { @MainActor in
+            defer { dataBusy = false }
+            do {
+                let (data, validation) = try await Task.detached(priority: .userInitiated) {
+                    // The security scope outlives every background read and closes
+                    // on all success/error paths, before presenting confirmation.
+                    let access = url.startAccessingSecurityScopedResource()
+                    defer { if access { url.stopAccessingSecurityScopedResource() } }
+                    let limit = DiaryStore.maximumBackupBytes
+                    let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                    guard size <= limit else {
+                        throw DiaryStoreError.invalidBackup("备份超过 10 MiB，无法导入")
+                    }
+                    let handle = try FileHandle(forReadingFrom: url)
+                    defer { try? handle.close() }
+                    var data = Data()
+                    // Reads can be short. Keep a hard limit even for a provider
+                    // that omits or changes its reported file size.
+                    while data.count <= limit {
+                        let chunk = try handle.read(upToCount: min(64 * 1024, limit + 1 - data.count)) ?? Data()
+                        if chunk.isEmpty { break }
+                        data.append(chunk)
+                    }
+                    guard data.count <= limit else {
+                        throw DiaryStoreError.invalidBackup("备份超过 10 MiB，无法导入")
+                    }
+                    return (data, store.validateBackup(data))
+                }.value
+                guard validation.isValid else {
+                    localError = "这份备份无法导入：\n" + validation.errors.prefix(3).joined(separator: "\n")
+                    return
+                }
+                importData = data
+                importSummary = "已检查 \(validation.entryCount) 条记录。将添加 \(validation.newCount) 条，跳过 \(validation.existingCount) 条已有记录。现有内容不会被覆盖。"
+                confirmImport = true
+            } catch { localError = "无法读取备份：\(error.localizedDescription)" }
+        }
+    }
+    private func restore() {
+        guard !dataBusy else { return }
+        guard let data = importData, let store = model.store else { localError = "存储暂不可用，尚未导入"; return }
+        dataBusy = true
+        busyMessage = "正在恢复备份…"
+        Task { @MainActor in
+            defer { dataBusy = false }
+            do {
+                let result = try await Task.detached(priority: .userInitiated) {
+                    try store.mergeJSON(data)
+                }.value
+                importData = nil
+                await model.reloadAsync()
+                WidgetCenter.shared.reloadAllTimelines()
+                localError = "恢复完成：添加 \(result.insertedCount) 条，保留原有 \(result.skippedCount) 条"
+            } catch { localError = "没有导入任何记录：\(error.localizedDescription)" }
+        }
+    }
+    private func setReminder(_ value: Bool) {
+        guard !dataBusy else { return }
+        reminderEnabled = value
+        reconcileReminder(requestPermission: value)
+    }
+    private func setReminderTime(_ value: Date) {
+        guard !dataBusy else { return }
+        reminderTime = value
+        reminderHour = Calendar.current.component(.hour, from: value)
+        reminderMinute = Calendar.current.component(.minute, from: value)
+        reconcileReminder(requestPermission: false)
+    }
+    private func refreshReminderStatus() {
+        guard !busy, !importing, share == nil, !confirmImport else { return }
+        // Re-check OS permission on appearance/foreground; AppStorage alone
+        // cannot tell whether the user disabled notifications in iOS Settings.
+        reconcileReminder(requestPermission: false)
+    }
+    private func reconcileReminder(requestPermission: Bool) {
+        let enabled = reminderEnabled
+        let hour = reminderHour
+        let minute = reminderMinute
+        let previous = reminderTask
+        let revision = UUID()
+        reminderRevision = revision
+        reminderBusy = true
+        busyMessage = "正在更新提醒…"
+        // Await the prior operation rather than cancelling an in-flight add:
+        // cancellation would not undo the request already sent to the OS.
+        reminderTask = Task { @MainActor in
+            await previous?.value
+            var saved = false
+            var failure: String?
+            do {
+                let center = UNUserNotificationCenter.current()
+                if enabled {
+                    var settings = await center.notificationSettings()
+                    if requestPermission && settings.authorizationStatus == .notDetermined {
+                        _ = try await center.requestAuthorization(options: [.alert, .sound])
+                        settings = await center.notificationSettings()
+                    }
+                    guard Self.notificationsAllowed(settings.authorizationStatus) else {
+                        center.removePendingNotificationRequests(withIdentifiers: ["pupudiary.daily"])
+                        throw ReminderError.permissionDenied
+                    }
+                    let content = UNMutableNotificationContent()
+                    content.title = "留一点时间给自己"
+                    content.body = "想记的时候，来噗噗手帐坐坐。"
+                    content.sound = .default
+                    let trigger = UNCalendarNotificationTrigger(dateMatching: DateComponents(hour: hour, minute: minute), repeats: true)
+                    try await center.add(UNNotificationRequest(identifier: "pupudiary.daily", content: content, trigger: trigger))
+                    // Permission may change while the asynchronous add runs.
+                    let latest = await center.notificationSettings()
+                    guard Self.notificationsAllowed(latest.authorizationStatus) else {
+                        center.removePendingNotificationRequests(withIdentifiers: ["pupudiary.daily"])
+                        throw ReminderError.permissionDenied
+                    }
+                    saved = true
+                } else {
+                    center.removePendingNotificationRequests(withIdentifiers: ["pupudiary.daily"])
+                }
+            } catch {
+                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["pupudiary.daily"])
+                failure = error.localizedDescription
+            }
+            // Old completions must not overwrite the newest toggle/time state.
+            guard reminderRevision == revision else { return }
+            reminderEnabled = saved
+            if let failure { localError = "提醒未保存：\(failure)" }
+            reminderBusy = false
+            reminderTask = nil
+        }
+    }
+    private static func notificationsAllowed(_ status: UNAuthorizationStatus) -> Bool {
+        status == .authorized || status == .provisional || status == .ephemeral
+    }
+    private enum ReminderError: LocalizedError {
+        case permissionDenied
+        var errorDescription: String? { "通知权限未开启。你可以在 iPhone 设置中为噗噗手帐开启通知。" }
     }
 }
 private struct ShareFile: Identifiable { let id = UUID(); let url: URL }
@@ -156,7 +287,7 @@ struct WidgetPreview: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 26) {
                     Text("桌面上的小陪伴").font(.system(.largeTitle, design: .rounded, weight: .bold))
-                    Text("不必打开手帐，也能记下此刻").foregroundStyle(PupuStyle.muted)
+                    Text(model.sharedAvailable ? "不必打开手帐，也能记下此刻" : "放一个入口，想记时轻轻一点").foregroundStyle(PupuStyle.muted)
                     VStack(alignment: .leading, spacing: 14) {
                         PupuWidgetContent(count: model.today.count, last: model.entries.first?.occurredAt, discreet: !model.sharedAvailable, sharedAvailable: model.sharedAvailable)
                         Label(model.sharedAvailable ? "记下此刻" : "打开 App 记录", systemImage: "plus").font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(11).background(PupuStyle.green, in: Capsule()).foregroundStyle(PupuStyle.onGreen)

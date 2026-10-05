@@ -18,9 +18,10 @@ struct HistoryView: View {
         Dictionary(grouping: filtered) { calendar.startOfDay(for: $0.occurredAt) }.sorted { $0.key > $1.key }
     }
     var body: some View {
+        let dayCounts = Dictionary(grouping: model.entries) { calendar.startOfDay(for: $0.occurredAt) }.mapValues(\.count)
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                LazyVStack(alignment: .leading, spacing: 20) {
                     VStack(spacing: 17) {
                         HStack {
                             Button { moveMonth(-1) } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }.accessibilityLabel("上个月")
@@ -34,7 +35,7 @@ struct HistoryView: View {
                             ForEach(Array(monthDays.enumerated()), id: \.offset) { _, day in
                                 if let day {
                                     let active = selectedDate.map { calendar.isDate(day, inSameDayAs: $0) } ?? false
-                                    let count = model.entries.filter { calendar.isDate($0.occurredAt, inSameDayAs: day) }.count
+                                    let count = dayCounts[calendar.startOfDay(for: day)] ?? 0
                                     Button { selectedDate = active ? nil : day } label: {
                                         VStack(spacing: 3) {
                                             Text(day, format: .dateTime.day()).font(.system(.subheadline, design: .rounded, weight: active ? .bold : .regular))

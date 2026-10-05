@@ -69,16 +69,16 @@ struct RecordView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             Text("用时").font(.headline); Spacer()
-                            TextField("未填写", text: $duration).keyboardType(.numberPad).multilineTextAlignment(.trailing).frame(width: 90).accessibilityLabel("用时分钟")
+                            TextField("未填写", text: $duration).keyboardType(.numberPad).multilineTextAlignment(.trailing).frame(width: 90).accessibilityLabel("用时分钟").accessibilityIdentifier("duration-field")
                             Text("分钟").font(.subheadline).foregroundStyle(PupuStyle.muted)
                         }
-                        TextField("想补充的事情…", text: $note, axis: .vertical).lineLimit(3...6).padding(14).background(PupuStyle.card, in: RoundedRectangle(cornerRadius: 14)).accessibilityLabel("备注")
+                        TextField("想补充的事情…", text: $note, axis: .vertical).lineLimit(3...6).padding(14).background(PupuStyle.card, in: RoundedRectangle(cornerRadius: 14)).accessibilityLabel("备注").accessibilityIdentifier("note-field")
                     }
                     if entry != nil {
                         Button("移入最近删除", role: .destructive) { deleteConfirmation = true }.frame(maxWidth: .infinity).padding(.top, 8)
                     }
                 }.padding(22).padding(.bottom, 24)
-            }.paper()
+            }.paper().scrollDismissesKeyboard(.interactively)
             .navigationTitle(entry == nil ? "新的一笔" : "这一笔的详情").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.accessibilityIdentifier("cancel-record") }
