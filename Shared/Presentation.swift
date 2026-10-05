@@ -61,7 +61,7 @@ struct PupuWidgetContent: View {
                 Text("排便记录").font(.caption.weight(.semibold)).foregroundStyle(PupuStyle.muted)
                 if !sharedAvailable {
                     Text("在 App 内查看").font(.system(.headline, design: .rounded)).foregroundStyle(PupuStyle.ink)
-                    Text("共享空间未启用").font(.caption2).foregroundStyle(PupuStyle.muted)
+                    Text("请先打开 App").font(.caption2).foregroundStyle(PupuStyle.muted)
                 } else if discreet {
                     Text("内容已隐藏").font(.system(.headline, design: .rounded)).foregroundStyle(PupuStyle.ink)
                 } else {

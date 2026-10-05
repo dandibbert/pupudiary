@@ -1,7 +1,6 @@
 name: Native redesign preview
 
 on:
-  pull_request:
   workflow_dispatch:
 
 defaults:
@@ -15,8 +14,8 @@ concurrency:
   group: native-preview-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-# One real iPhone Simulator job per PR revision. Full validation is intentionally
-# kept in ios.yml for main pushes or explicit manual dispatch.
+# Optional short native preview. Full validation runs from ios.yml on PRs,
+# main pushes, or an explicit manual dispatch.
 jobs:
   native-preview:
     name: Home and record native preview

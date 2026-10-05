@@ -47,7 +47,7 @@ struct TrendsView: View {
                             }
                         }.frame(minHeight: 133, alignment: .bottom)
                         }
-                        Text("未记录不等于没有发生，图表仅展示已保存的记录").font(.caption2).foregroundStyle(PupuStyle.muted)
+                        Text("按排便记录统计，补记后自动更新").font(.caption2).foregroundStyle(PupuStyle.muted)
                     }.diaryCard()
                     VStack(alignment: .leading, spacing: 17) {
                         SectionHeading(title: "形态分布", detail: "已填写 \(records.filter { $0.bristol != nil }.count) 条")
