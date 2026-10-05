@@ -1,0 +1,81 @@
+name: Build IPA
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    env:
+      HAS_CERT: ${{ secrets.CERT_P12_BASE64 != '' && secrets.APP_PROFILE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Xcode version
+        run: xcodebuild -version
+
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project Pupudiary.xcodeproj \
+            -scheme Pupudiary \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/Pupudiary.xcarchive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            | tee build.log | grep -E "error:|warning: .*Pupudiary|ARCHIVE (SUCCEEDED|FAILED)" || true
+          grep -q "ARCHIVE SUCCEEDED" build.log
+
+      - name: Show build errors
+        if: failure()
+        run: grep -n -B2 -A6 "error:" build.log | head -200 || true
+
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p build/Payload
+          cp -R build/Pupudiary.xcarchive/Products/Applications/Pupudiary.app build/Payload/
+          (cd build && zip -qry Pupudiary-unsigned.ipa Payload)
+          ls -lh build/Pupudiary-unsigned.ipa
+
+      - name: Sign with your certificate (optional)
+        env:
+          CERT_P12_BASE64: ${{ secrets.CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.CERT_PASSWORD }}
+          APP_PROFILE_BASE64: ${{ secrets.APP_PROFILE_BASE64 }}
+          WIDGET_PROFILE_BASE64: ${{ secrets.WIDGET_PROFILE_BASE64 }}
+        if: env.HAS_CERT == 'true'
+        run: |
+          echo "$CERT_P12_BASE64" | base64 --decode > cert.p12
+          echo "$APP_PROFILE_BASE64" | base64 --decode > app.mobileprovision
+          WIDGET=""
+          if [ -n "$WIDGET_PROFILE_BASE64" ]; then
+            echo "$WIDGET_PROFILE_BASE64" | base64 --decode > widget.mobileprovision
+            WIDGET=widget.mobileprovision
+          fi
+          scripts/resign.sh build/Pupudiary-unsigned.ipa cert.p12 "$CERT_PASSWORD" app.mobileprovision "$WIDGET" build/Pupudiary-signed.ipa
+          rm -f cert.p12 *.mobileprovision
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Pupudiary-ipa
+          path: build/*.ipa
+          if-no-files-found: error
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/*.ipa

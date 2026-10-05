@@ -1,0 +1,10 @@
+# Xcode（工程由 XcodeGen 生成）
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+build/
+*.ipa
+*.p12
+*.mobileprovision
+.DS_Store
