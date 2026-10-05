@@ -78,7 +78,7 @@ struct ExportView: View {
                     Text(errorText).font(.cute(13, .medium)).foregroundStyle(Theme.warning)
                 }
 
-                Text("生成后可以「存储到文件」、AirDrop、发给自己或打印。JSON 备份可以在「我的 › 从备份导入」恢复。")
+                Text("生成后可以「存储到文件」、AirDrop、发给自己或打印。JSON 备份可以在「我的 › 导入」恢复。")
                     .font(.cute(12, .medium))
                     .foregroundStyle(Theme.subtle)
             }

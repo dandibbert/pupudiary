@@ -18,6 +18,7 @@ struct PupudiaryWidgetBundle: WidgetBundle {
 struct PoopEntry: TimelineEntry {
     let date: Date
     let todayCount: Int
+    let today: [PoopRecord]
     let last: PoopRecord?
     let week: [DaySummary]
     let headline: Insight
@@ -33,6 +34,7 @@ struct PoopEntry: TimelineEntry {
         let stats = GutStats(records: RecordStorage.load(), now: date)
         return PoopEntry(date: date,
                          todayCount: stats.today.count,
+                         today: stats.today,
                          last: stats.last,
                          week: stats.days(7),
                          headline: stats.headline,
@@ -45,7 +47,7 @@ struct PoopEntry: TimelineEntry {
             PoopRecord(timestamp: now.addingTimeInterval(TimeInterval(-i * 86_400 - 3_600)), bristol: t)
         }
         let stats = GutStats(records: samples, now: now)
-        return PoopEntry(date: now, todayCount: 1, last: samples.first, week: stats.days(7),
+        return PoopEntry(date: now, todayCount: 1, today: Array(samples.prefix(1)), last: samples.first, week: stats.days(7),
                          headline: stats.headline, quickType: .t4)
     }
 }
@@ -84,7 +86,7 @@ struct PupudiaryWidget: Widget {
         }
         .configurationDisplayName("噗噗手帐")
         .description("一眼看到今天的状态，点一下就能记录。")
-        .supportedFamilies([.systemSmall, .systemMedium])
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
 
@@ -95,6 +97,7 @@ struct PupudiaryWidgetView: View {
     var body: some View {
         switch family {
         case .systemMedium: MediumView(entry: entry)
+        case .systemLarge: LargeView(entry: entry)
         default: SmallView(entry: entry)
         }
     }
@@ -222,6 +225,121 @@ private struct MediumView: View {
     }
 }
 
+private struct LargeView: View {
+    let entry: PoopEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // 顶部：吉祥物 + 今日次数 + 一键记录
+            HStack(spacing: 10) {
+                Mascot(mood: entry.justLogged ? .excited : entry.headline.level.mood)
+                    .frame(width: 52, height: 52)
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(alignment: .firstTextBaseline, spacing: 2) {
+                        Text("今天").font(.cute(13, .bold)).foregroundStyle(Theme.subtle)
+                        Text("\(entry.todayCount)")
+                            .font(.cute(30, .heavy))
+                            .foregroundStyle(Theme.ink)
+                            .contentTransition(.numericText())
+                        Text("次").font(.cute(13, .bold)).foregroundStyle(Theme.subtle)
+                    }
+                    LastLine(entry: entry)
+                }
+                Spacer(minLength: 0)
+                Button(intent: QuickLogIntent(status: .usual)) {
+                    QuickButtonLabel(justLogged: entry.justLogged)
+                }
+                .buttonStyle(.plain)
+                .frame(width: 118)
+            }
+
+            // 健康提示
+            HStack(spacing: 6) {
+                Image(systemName: entry.headline.level.symbol)
+                    .foregroundStyle(entry.headline.level.color)
+                Text(entry.justLogged ? "已记录 ✓ 打开 App 可补充细节" : entry.headline.title)
+                    .font(.cute(12, .bold))
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(entry.headline.level.color.opacity(0.14), in: Capsule())
+
+            // 最近 7 天
+            HStack(spacing: 0) {
+                ForEach(entry.week) { d in
+                    VStack(spacing: 3) {
+                        ZStack {
+                            if let s = d.dominantStatus {
+                                Circle().fill(s.color)
+                                Text("\(d.count)").font(.cute(12, .heavy)).foregroundStyle(.white)
+                            } else {
+                                Circle().strokeBorder(Theme.subtle.opacity(0.35), lineWidth: 1.2)
+                            }
+                        }
+                        .frame(width: 26, height: 26)
+                        Text(Calendar.current.isDateInToday(d.day) ? "今" : MiniWeek.weekday(d.day))
+                            .font(.cute(10, .bold))
+                            .foregroundStyle(Calendar.current.isDateInToday(d.day) ? Theme.primary : Theme.subtle)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+
+            // 今天的记录
+            VStack(alignment: .leading, spacing: 6) {
+                if entry.today.isEmpty {
+                    Text("今天还没有记录，点右上角按钮就能记一笔～")
+                        .font(.cute(12, .medium))
+                        .foregroundStyle(Theme.subtle)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, 6)
+                } else {
+                    ForEach(entry.today.prefix(2)) { r in
+                        HStack(spacing: 8) {
+                            BristolIcon(type: r.bristol)
+                                .frame(width: 24, height: 24)
+                            Text(r.bristol.nickname).font(.cute(13, .bold)).foregroundStyle(Theme.ink)
+                            Text(r.status.title)
+                                .font(.cute(11, .bold))
+                                .foregroundStyle(r.status.color)
+                            Spacer(minLength: 0)
+                            Text(r.timestamp, format: .dateTime.hour().minute())
+                                .font(.cute(12, .bold))
+                                .foregroundStyle(Theme.subtle)
+                                .monospacedDigit()
+                        }
+                    }
+                    if entry.today.count > 2 {
+                        Text("还有 \(entry.today.count - 2) 条…").font(.cute(11, .medium)).foregroundStyle(Theme.subtle)
+                    }
+                }
+            }
+            .frame(maxHeight: .infinity, alignment: .top)
+
+            // 按状态一键记录
+            HStack(spacing: 6) {
+                ForEach(GutStatus.allCases) { s in
+                    Button(intent: QuickLogIntent(status: QuickStatus(s))) {
+                        VStack(spacing: 2) {
+                            BristolIcon(type: s.representative, showFace: false)
+                                .frame(width: 20, height: 20)
+                            Text(s.title).font(.cute(12, .heavy)).foregroundStyle(Theme.ink)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .background(s.color.opacity(0.22), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .widgetURL(URL(string: "pupudiary://home"))
+    }
+}
+
 private struct MiniWeek: View {
     let days: [DaySummary]
     var body: some View {
@@ -237,7 +355,7 @@ private struct MiniWeek: View {
                         }
                     }
                     .frame(width: 18, height: 18)
-                    Text(Calendar.current.isDateInToday(d.day) ? "今" : weekday(d.day))
+                    Text(Calendar.current.isDateInToday(d.day) ? "今" : Self.weekday(d.day))
                         .font(.cute(9, .bold))
                         .foregroundStyle(Theme.subtle)
                 }
@@ -245,7 +363,7 @@ private struct MiniWeek: View {
         }
     }
 
-    private func weekday(_ d: Date) -> String {
+    static func weekday(_ d: Date) -> String {
         ["日", "一", "二", "三", "四", "五", "六"][Calendar.current.component(.weekday, from: d) - 1]
     }
 }

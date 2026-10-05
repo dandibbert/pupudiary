@@ -95,7 +95,7 @@ struct SettingsView: View {
                     Button {
                         importing = true
                     } label: {
-                        Label("从备份导入", systemImage: "square.and.arrow.down.fill")
+                        Label("导入（噗噗手帐 / PoopLog 备份）", systemImage: "square.and.arrow.down.fill")
                     }
                     Button(role: .destructive) {
                         confirmClear = true
@@ -142,7 +142,7 @@ struct SettingsView: View {
             .background(Theme.background.ignoresSafeArea())
             .navigationTitle("我的")
             .tint(Theme.primary)
-            .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.json, .zip, .data]) { result in
                 handleImport(result)
             }
             .confirmationDialog("确定清空全部 \(store.records.count) 条记录吗？此操作无法撤销。",
@@ -213,11 +213,15 @@ struct SettingsView: View {
             defer { if access { url.stopAccessingSecurityScopedResource() } }
             do {
                 let data = try Data(contentsOf: url)
-                let records = try Exporter.importJSON(data)
+                let fromPoopLog = PoopLogImporter.isPoopLogBackup(data)
+                let records = try fromPoopLog ? PoopLogImporter.records(from: data) : Exporter.importJSON(data)
                 let added = store.merge(records)
-                alert = AlertInfo(title: "导入成功", message: "读取到 \(records.count) 条记录，新增 \(added) 条。")
+                alert = AlertInfo(title: "导入成功",
+                                  message: "从\(fromPoopLog ? " PoopLog " : "备份")读取到 \(records.count) 条记录，新增 \(added) 条。重复导入不会产生重复记录。")
+            } catch let error as PoopLogImporter.ImportError {
+                alert = AlertInfo(title: "导入失败", message: error.errorDescription ?? "无法读取 PoopLog 备份。")
             } catch {
-                alert = AlertInfo(title: "导入失败", message: "文件格式不对，请选择噗噗手帐导出的 JSON 备份。")
+                alert = AlertInfo(title: "导入失败", message: "文件格式不对。支持噗噗手帐导出的 JSON 备份，以及 PoopLog 导出的 zip 备份。")
             }
         case .failure:
             alert = AlertInfo(title: "导入失败", message: "无法读取这个文件。")
@@ -234,7 +238,7 @@ struct WidgetGuideView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    step(1, "桌面小组件", "长按桌面空白处 → 左上角「＋」→ 搜索「噗噗手帐」。小号组件有一个「噗！」按钮，中号组件可以按状态一键记录，不用打开 App。")
+                    step(1, "桌面小组件", "长按桌面空白处 → 左上角「＋」→ 搜索「噗噗手帐」。小号有一个「噗！」按钮；中号可以按状态一键记录；大号还能看到 7 天概览和今天的记录。都不用打开 App。")
                     step(2, "锁屏小组件", "长按锁屏 → 自定 → 锁定屏幕 → 添加小组件，可以随时看到今天的次数。")
                     step(3, "控制中心（iOS 18+）", "下拉控制中心 → 左上角「＋」→ 添加控制 → 搜索「噗噗手帐」。")
                     step(4, "Siri / 操作按钮", "对 Siri 说「用噗噗手帐记一下」。iPhone 15 Pro 及以上可以在 设置 › 操作按钮 › 快捷指令 里选择「噗！记一下」。")
