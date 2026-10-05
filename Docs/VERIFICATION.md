@@ -1,61 +1,64 @@
 # Verification and screenshot provenance
 
-## Automated checks
+## Native preview and full validation
 
-The GitHub Actions workflow `.github/workflows/ios.yml` runs on push, pull request, and manual dispatch. It uses the `macos-15` runner and an explicit installed Xcode 26.3 path. The workflow records the actual Xcode/macOS versions, SDKs, available runtimes and device inventory as artifacts. If GitHub removes that Xcode version, update the workflow after inspecting the current runner inventory; do not silently claim an untested toolchain.
+The short `native-preview.yml` workflow captures the redesigned home and record form in one XCTest session. It runs on an Intel `macos-15-intel` runner with Xcode 26.3 and a real iPhone 16 Pro / iOS 18.6 Simulator. It asserts that the seven illustrated shape choices and effort controls are visible, exports the original PNG attachments and retains the full result bundle. This is a native SwiftUI app launch, not a rendered web mockup.
 
-Order matters:
+The full `.github/workflows/ios.yml` workflow independently runs:
 
-1. Generate the project from `project.yml` with XcodeGen
-2. Build the app and embedded widget for iOS Simulator
-3. Select the newest installed Pro iPhone; also select an installed iPhone SE for compact coverage, with a clearly named fallback only if SE is absent
-4. Boot the real simulators, install the compiled app, launch each screen, and capture native PNG screenshots
-5. **Upload screenshots before** tests or device builds
-6. Run XCTest core tests and XCUI smoke tests, preserving the `.xcresult` bundle
-7. Independently build Release for `generic/platform=iOS`, package the full app including widget, validate the unsigned IPA and calculate SHA-256
-8. Upload all available logs/results even when a later stage fails
+- Native screenshot, quick logging, record form, core/model, compact-phone and appearance shards
+- Production Foundation/SQLite tests on macOS without Simulator boot
+- Release device build, complete embedded WidgetKit extension, unsigned arm64 IPA validation and SHA-256 calculation
 
-An IPA can be produced even when a test stage fails. Check the full run conclusion and individual stage outcomes, not just artifact existence. An unavailable or failed check is not a pass.
+The workflow records actual Xcode/macOS versions, SDKs, runtime and device inventory. It uses installed iPhone 16 Pro and iPhone SE (3rd generation) Simulators on iOS 18.6. No unavailable model is renamed as iPhone 18 Pro.
 
-## Screenshot origin
+Each native test step has a 20-minute limit. One retry is allowed only for a runner killed before any test case began; assertion failures are never automatically retried. Both attempts remain in the artifacts. Native attachments and test results are uploaded even when a later stage fails.
 
-`scripts/capture-screenshots.sh` uses `xcrun simctl io <actual-device-UDID> screenshot` and does not resize the output or render a web mockup. `manifest.json` records the actual device name, iOS version, native pixel size and screen. No unavailable model is relabeled as iPhone 18 Pro or any other requested model.
+An IPA can be produced while a test job fails or is still running. Artifact existence is not a test pass. Check the exact source SHA, full run conclusion, individual test summaries and skipped tests before treating a build as verified.
 
-The app supports simulator-only deterministic demo launches:
+## What the screenshots demonstrate
 
-```sh
-xcrun simctl launch <UDID> com.dandibbert.pupudiary --uitesting --screen home
-xcrun simctl launch <UDID> com.dandibbert.pupudiary --uitesting --screen record
-xcrun simctl launch <UDID> com.dandibbert.pupudiary --uitesting --screen widget-preview
-```
+Screenshots come from native `XCUIScreen.main.screenshot()` / `XCUIApplication.screenshot()` attachments. `xcresulttool` exports their unchanged PNG bytes. The artifact includes device/OS metadata, an attachment manifest and PNG dimensions. Screenshots use isolated demo data, never the user's diary.
 
-The widget-preview screen is an **app-hosted preview of the shared SwiftUI widget design**, not a SpringBoard widget screenshot. It demonstrates layout only. CI does not use undocumented/private SpringBoard automation to add widgets. Actual Home Screen installation, App Intent execution and signed shared-container access need the physical-device checklist in `SIGNING.md`. Do not present preview screenshots as proof those checks passed.
+The widget-preview screen is an **app-hosted view of the shared SwiftUI widget design**, not a SpringBoard screenshot. It demonstrates appearance only. Actual Home Screen installation, interactive AppIntent execution and entitled cross-process App Group access require the physical-device checklist in [SIGNING.md](SIGNING.md). Do not claim that a preview proves those checks passed.
 
-UI smoke tests cover quick save/undo, rapid repeated quick saves, cancel/reopen without saving, a detailed record with optional fields empty, and background/foreground retention. They identify elements with stable accessibility IDs rather than screen coordinates. Core tests cover persistence/business logic separately. UI test launches use an isolated temporary diary, so automated tests do not erase a real diary.
+PNG validation checks basic file structure/dimensions; it is not a visual-quality judgment. Inspect actual pixels for clipped text, overflow, contrast and small-screen/dynamic-type behavior.
 
-## Local reproduction on macOS
+## Functional coverage
+
+Core tests exercise transaction safety, cross-connection duplicate protection, edits/undo/recovery, CSV escaping/formula neutralization, strict JSON validation, additive nonoverwriting restore, timezone/DST boundaries, supported backup limits and failure rollback.
+
+
+UI tests cover quick save/undo, repeated taps, foreground retention, supplementing the same entry, cancelling a form, leaving optional fields empty, scrolling with the keyboard, note persistence and an empty first-use view without an invented elapsed interval. They use accessibility identifiers rather than screen coordinates.
+
+The real `QuickLogIntent.perform()` persistence-before-return path can run against an isolated Simulator-only test container. A separate real shared-App-Group integration test explicitly skips when the signing entitlement is unavailable; a skip is not a pass. Device/release builds do not include the testing-container override.
+
+## Reproduce on a Mac
 
 ```sh
 brew install xcodegen
 xcodegen generate
 mkdir -p build/logs
-xcrun simctl list devices available --json > build/logs/simulators.json
-python3 scripts/select-simulators.py build/logs/simulators.json build/simulator-selection.json
-xcodebuild -project Pupudiary.xcodeproj -scheme Pupudiary -configuration Debug \
-  -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-  -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO build
-scripts/capture-screenshots.sh
-# Substitute the real primary UDID from build/simulator-selection.json
-xcodebuild -project Pupudiary.xcodeproj -scheme Pupudiary \
-  -destination 'platform=iOS Simulator,id=YOUR_SIMULATOR_UDID' \
+xcodebuild -version
+xcrun simctl list devices available
+# Use a real available device name and runtime from this machine.
+xcodebuild test -project Pupudiary.xcodeproj -scheme Pupudiary \
+  -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=18.6' \
   -derivedDataPath build/DerivedData -resultBundlePath build/Pupudiary.xcresult \
-  -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO test
+  -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO
+scripts/test-core-on-macos.sh
 scripts/build-unsigned-ipa.sh
 ```
 
-Open `build/Pupudiary.xcresult` with Xcode to inspect test cases, failures, and attached screenshots. Inspect native screenshots at their original resolution for clipping, small-screen overflow, contrast and accessibility. The automated PNG validation verifies valid/nonempty dimensions; it is not a visual-quality judgment.
+For a short home/form run, append:
+
+```sh
+-only-testing:PupudiaryUITests/PupudiaryUITests/testCaptureRedesignedHomeAndRecord
+```
+
+Open the `.xcresult` bundle in Xcode, or export attachments with the current Xcode's `xcresulttool`. CI verifies that tool's help before using it. `scripts/capture-screenshots.sh` remains an optional direct-simctl route, but CI uses XCTest to manage Simulator lifecycle because that route was more reliable on the tested hosted runners.
 
 ## Source references
 
-- [GitHub's macOS 15 runner inventory](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md)
+- [GitHub runner images](https://github.com/actions/runner-images)
 - [XcodeGen project specification](https://yonaskolb.github.io/XcodeGen/Docs/ProjectSpec.html)

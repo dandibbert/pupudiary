@@ -3,7 +3,7 @@ import AppIntents
 import WidgetKit
 
 struct QuickLogIntent: AppIntent {
-    static var title: LocalizedStringResource = "记下此刻"
+    static var title: LocalizedStringResource = "记录排便"
     static var description = IntentDescription("只记录当前时间，其余详情留空。可以在噗噗手帐里补充或撤销。")
     static var openAppWhenRun = false
     #if DEBUG && targetEnvironment(simulator)

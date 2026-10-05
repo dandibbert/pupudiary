@@ -102,7 +102,7 @@ struct RecordView: View {
                         BristolChoiceCell(type: type, selected: bristol == type)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityElement(children: .ignore)
+                    .accessibilityElement(children: .ignore).accessibilityAddTraits(.isButton).accessibilityHidden(false)
                     .accessibilityLabel(BristolMetadata.accessibilityLabel(for: type))
                     .accessibilityIdentifier("bristol-\(type)")
                     .accessibilityAddTraits(bristol == type ? .isSelected : [])
@@ -112,7 +112,7 @@ struct RecordView: View {
                     BristolChoiceCell(type: nil, selected: bristol == nil)
                 }
                 .buttonStyle(.plain)
-                .accessibilityElement(children: .ignore)
+                .accessibilityElement(children: .ignore).accessibilityAddTraits(.isButton).accessibilityHidden(false)
                 .accessibilityLabel("形态未选择")
                 .accessibilityIdentifier("bristol-none")
                 .accessibilityAddTraits(bristol == nil ? .isSelected : [])
@@ -131,7 +131,7 @@ struct RecordView: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .accessibilityElement(children: .ignore).accessibilityLabel("费力程度，\(option)")
+                    .accessibilityElement(children: .ignore).accessibilityAddTraits(.isButton).accessibilityHidden(false).accessibilityLabel("费力程度，\(option)")
                     .accessibilityIdentifier("effort-\(["easy", "some", "hard"][index])")
                     .accessibilityAddTraits(effort == option ? .isSelected : [])
                 }
@@ -152,7 +152,7 @@ struct RecordView: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .accessibilityElement(children: .ignore).accessibilityLabel("颜色，\(option.name)")
+                    .accessibilityElement(children: .ignore).accessibilityAddTraits(.isButton).accessibilityHidden(false).accessibilityLabel("颜色，\(option.name)")
                     .accessibilityIdentifier("color-\(option.id)")
                     .accessibilityAddTraits(color == option.name ? .isSelected : [])
                 }
@@ -171,7 +171,7 @@ struct RecordView: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .accessibilityElement(children: .ignore).accessibilityLabel("大概多少，\(option)")
+                    .accessibilityElement(children: .ignore).accessibilityAddTraits(.isButton).accessibilityHidden(false).accessibilityLabel("大概多少，\(option)")
                     .accessibilityIdentifier("amount-\(index + 1)")
                     .accessibilityAddTraits(amount == option ? .isSelected : [])
                 }

@@ -67,8 +67,6 @@ struct SectionHeading: View {
 struct HomeView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dynamicTypeSize) private var typeSize
-    @State private var selectedDay: Date?
-    @State private var showDayActions = false
     @State private var showHealthInfo = false
     private var recent: [LogEntry] { Array(model.entries.prefix(3)) }
     private var weekEntries: [LogEntry] {
@@ -83,13 +81,13 @@ struct HomeView: View {
                         Text("排便记录").font(.system(.title2, design: .rounded, weight: .bold))
                         Spacer()
                         HStack(spacing: 3) {
-                            Text("今天已记"); Text("\(model.today.count)").fontWeight(.semibold).accessibilityIdentifier("entry-count"); Text("次")
+                            Text("今天"); Text("\(model.today.count)").fontWeight(.semibold).accessibilityIdentifier("entry-count"); Text("次")
                         }.font(.subheadline).foregroundStyle(PupuStyle.muted)
                         Button { model.showSettings = true } label: { Image(systemName: "slider.horizontal.3").frame(width: 40, height: 40) }.accessibilityLabel("设置")
                     }
                     TimelineView(.periodic(from: Date(), by: 60)) { context in
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("上次记录的排便").font(.subheadline).foregroundStyle(PupuStyle.muted)
+                            Text("距上次排便").font(.subheadline).foregroundStyle(PupuStyle.muted)
                             if let last = model.entries.first {
                                 Text(interval(since: last.occurredAt, now: context.date)).font(.system(size: typeSize.isAccessibilitySize ? 34 : 40, weight: .bold, design: .rounded)).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("last-bowel-interval")
                                 Text(last.occurredAt, format: .dateTime.month().day().hour().minute()).font(.caption).foregroundStyle(PupuStyle.muted)
@@ -104,7 +102,7 @@ struct HomeView: View {
                                 }
                             } else {
                                 Text("尚无排便记录").font(.system(.title, design: .rounded, weight: .bold))
-                                Text("未记录的日子，不等于没有排便").font(.caption).foregroundStyle(PupuStyle.muted)
+                                Text("从第一次记录开始计算间隔").font(.caption).foregroundStyle(PupuStyle.muted)
                             }
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -116,11 +114,8 @@ struct HomeView: View {
                             let hard = weekEntries.filter { $0.bristol == 1 || $0.bristol == 2 }.count
                             if hard > 0 { Text("· 偏硬 \(hard) 次").font(.caption).foregroundStyle(PupuStyle.muted) }
                         }
-                        WeekStrip(entries: model.entries, dayStatuses: model.dayStatuses) { day in selectedDay = day; showDayActions = true }
-                        HStack(spacing: 10) {
-                            Text("— 未确认"); Text("0 已确认未排便"); Spacer()
-                            Button { selectedDay = Date(); showDayActions = true } label: { Text(model.hasNoBowelMovement(on: Date()) ? "今天已确认" : "今天未排便？") }.fontWeight(.medium)
-                        }.font(.caption2).foregroundStyle(PupuStyle.muted)
+                        WeekStrip(entries: model.entries) { day in model.requestedHistoryDate = day; model.selectedTab = 1 }
+
                     }.padding(.vertical, 12).padding(.horizontal, 12).background(PupuStyle.sage.opacity(0.60), in: RoundedRectangle(cornerRadius: 18))
                     VStack(alignment: .leading, spacing: 8) {
                         HStack { Text("最近排便").font(.headline); Spacer(); Button("全部记录") { model.selectedTab = 1 }.font(.caption) }
@@ -156,30 +151,18 @@ struct HomeView: View {
                 }.padding(.horizontal, 20).padding(.vertical, 10).background(PupuStyle.paper)
             }
             .toolbar(.hidden, for: .navigationBar)
-            .confirmationDialog(dayActionTitle, isPresented: $showDayActions, titleVisibility: .visible) {
-                Button("补记排便") { model.recordDate = selectedDay; model.showRecord = true }
-                if let selectedDay, model.entries.contains(where: { Calendar.current.isDate($0.occurredAt, inSameDayAs: selectedDay) }) {
-                    Button("当天已有排便记录", action: {}).disabled(true)
-                } else if let selectedDay, model.hasNoBowelMovement(on: selectedDay) {
-                    Button("取消未排便确认") { model.clearNoBowelMovement(on: selectedDay) }
-                } else if let selectedDay {
-                    Button(Calendar.current.isDateInToday(selectedDay) ? "确认今天截至现在未排便" : "确认当天未排便") { model.confirmNoBowelMovement(on: selectedDay) }
-                }
-                Button("取消", role: .cancel) {}
-            } message: { Text("只有你主动确认的日期才记为 0 次；漏记不会算作未排便。") }
             .alert("便秘相关表现", isPresented: $showHealthInfo) { Button("知道了", role: .cancel) {} } message: {
-                Text("干硬或结块、排便费力或疼痛、排不尽感都可能与便秘相关。每个人的频率不同，记录不能单独诊断便秘；未记录也不等于未排便。依据：NIDDK、NHS 便秘说明。")
+                Text("未排便时长与频次按记录计算，默认未记录即未排便；漏记后补记会自动重新计算。干硬或结块、排便费力或疼痛、排不尽感可能与便秘相关，但这些记录不能单独诊断便秘。依据：NIDDK、NHS 便秘说明。")
             }
         }
     }
-    private var dayActionTitle: String { selectedDay.map { Calendar.current.isDateInToday($0) ? "今天截至现在" : $0.formatted(date: .abbreviated, time: .omitted) } ?? "当天记录" }
     private func interval(since date: Date, now: Date) -> String {
         let seconds = now.timeIntervalSince(date)
         guard seconds >= 0 else { return "记录时间在未来" }
         let minutes = Int(seconds / 60), hours = minutes / 60, days = hours / 24
-        if days > 0 { return "\(days) 天 \(hours % 24) 小时前" }
-        if hours > 0 { return "\(hours) 小时 \(minutes % 60) 分钟前" }
-        return minutes > 0 ? "\(minutes) 分钟前" : "刚刚"
+        if days > 0 { return "\(days) 天 \(hours % 24) 小时" }
+        if hours > 0 { return "\(hours) 小时 \(minutes % 60) 分钟" }
+        return minutes > 0 ? "\(minutes) 分钟" : "刚刚"
     }
     private func hasConstipationRelatedDetails(_ entry: LogEntry) -> Bool {
         entry.bristol == 1 || entry.bristol == 2 || ["有点费力", "很费力"].contains(entry.effort ?? "") || !(Set(entry.symptoms ?? []).intersection(["疼痛", "未尽感"])).isEmpty
@@ -195,25 +178,23 @@ struct HomeView: View {
 }
 struct WeekStrip: View {
     let entries: [LogEntry]
-    let dayStatuses: [DayStatus]
     var action: (Date) -> Void = { _ in }
     var body: some View {
         HStack(alignment: .top, spacing: 4) {
             ForEach(0..<7) { offset in
                 let day = Calendar.current.date(byAdding: .day, value: offset - 6, to: Date())!
                 let count = entries.filter { Calendar.current.isDate($0.occurredAt, inSameDayAs: day) }.count
-                let confirmed = dayStatuses.contains { $0.matches(date: day, calendar: .current) && !$0.isCancelled }
                 Button { action(day) } label: {
                     VStack(spacing: 5) {
                         Text(offset == 6 ? "今天" : day.formatted(.dateTime.weekday(.narrow))).font(.caption2).foregroundStyle(PupuStyle.muted)
                         ZStack(alignment: .bottom) {
                             RoundedRectangle(cornerRadius: 4).fill(PupuStyle.green.opacity(0.06)).frame(height: 38)
                             if count > 0 { RoundedRectangle(cornerRadius: 4).fill(PupuStyle.green.opacity(0.55)).frame(height: CGFloat(min(count, 4)) * 8 + 6) }
-                            Text(count > 0 ? "\(count)" : (confirmed ? "0" : "—")).font(.system(.headline, design: .rounded)).padding(.bottom, 7)
+                            Text("\(count)").font(.system(.headline, design: .rounded)).padding(.bottom, 7)
                         }
                         Text(day, format: .dateTime.day()).font(.caption2).foregroundStyle(PupuStyle.muted)
                     }.frame(maxWidth: .infinity)
-                }.buttonStyle(.plain).accessibilityLabel("\(day.formatted(date: .abbreviated, time: .omitted))，\(count > 0 ? "已记录\(count)次" : (confirmed ? "已确认未排便" : "未确认"))")
+                }.buttonStyle(.plain).accessibilityLabel("\(day.formatted(date: .abbreviated, time: .omitted))，\(count)次排便")
             }
         }
     }

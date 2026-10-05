@@ -104,7 +104,7 @@ extension PupudiaryUITests {
         XCTAssertTrue(app.buttons["quick-save"].waitForExistence(timeout: 10))
 
         launchScreen("widget-preview")
-        XCTAssertTrue(app.staticTexts["桌面上的小陪伴"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["排便记录小组件"].waitForExistence(timeout: 20))
         retainNativeCapture("widget-preview-app-hosted")
     }
 
@@ -116,11 +116,12 @@ extension PupudiaryUITests {
         retainNativeCapture("redesigned-home")
         app.buttons["open-record"].tap()
         XCTAssertTrue(app.buttons["save-record"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["bristol-1"].exists)
+        let firstShapeAppeared = app.buttons["bristol-1"].waitForExistence(timeout: 10)
+        retainNativeCapture("redesigned-record")
+        XCTAssertTrue(firstShapeAppeared)
         XCTAssertTrue(app.buttons["bristol-7"].isHittable)
         XCTAssertTrue(app.buttons["effort-easy"].isHittable)
         XCTAssertTrue(app.buttons["effort-hard"].isHittable)
-        retainNativeCapture("redesigned-record")
     }
 
     @MainActor
@@ -163,6 +164,15 @@ extension PupudiaryUITests {
         expectCount(initial + 1)
         XCTAssertEqual(app.buttons["open-record"].label, "详细记录")
         keepScreenshot("supplement-updates-existing-record")
+    }
+
+    @MainActor
+    @objc func testEmptyDiaryHasNoInventedBowelInterval() throws {
+        launchScreen("home", flags: ["--empty-diary"])
+        XCTAssertTrue(app.buttons["quick-save"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["尚无排便记录"].exists)
+        XCTAssertFalse(app.staticTexts["last-bowel-interval"].exists)
+        keepScreenshot("empty-diary-no-invented-interval")
     }
 
     @MainActor

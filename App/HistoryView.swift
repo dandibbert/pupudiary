@@ -72,8 +72,14 @@ struct HistoryView: View {
                 }.padding(20).padding(.bottom, 20)
             }.paper().navigationTitle("排便历史")
             .searchable(text: $query, prompt: "搜索备注与感受")
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { model.showRecord = true } label: { Image(systemName: "plus") }.accessibilityLabel("新建记录") } }
+            .onAppear(perform: applyRequestedDate)
+            .onChange(of: model.requestedHistoryDate) { _, _ in applyRequestedDate() }
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { model.recordDate = selectedDate; model.showRecord = true } label: { Image(systemName: "plus") }.accessibilityLabel("新建记录") } }
         }
+    }
+    private func applyRequestedDate() {
+        guard let date = model.requestedHistoryDate else { return }
+        selectedDate = date; month = date; model.requestedHistoryDate = nil
     }
     private var monthDays: [Date?] {
         let start = calendar.date(from: calendar.dateComponents([.year, .month], from: month))!

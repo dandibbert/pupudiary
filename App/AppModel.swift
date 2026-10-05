@@ -4,8 +4,8 @@ import UserNotifications
 
 @MainActor final class AppModel: ObservableObject {
     @Published var entries: [LogEntry] = []
-    @Published var dayStatuses: [DayStatus] = []
     @Published var recordDate: Date?
+    @Published var requestedHistoryDate: Date?
     @Published var isLoading = false
     private var reloadGeneration = 0
     @Published var error: String?
@@ -63,7 +63,7 @@ import UserNotifications
                     }
                 }
             }
-            if isUITesting { try seed() }
+            if isUITesting && !ProcessInfo.processInfo.arguments.contains("--empty-diary") { try seed() }
             reload()
             if let index = ProcessInfo.processInfo.arguments.firstIndex(of: "--screen"), ProcessInfo.processInfo.arguments.count > index + 1, isUITesting {
                 switch ProcessInfo.processInfo.arguments[index + 1] {
@@ -82,13 +82,13 @@ import UserNotifications
         reloadGeneration += 1
         let generation = reloadGeneration
         isLoading = true
-        let result = await Task.detached(priority: .userInitiated) { () -> Result<([LogEntry], [DayStatus]), Error> in
-            Result { (try store.entries(), try store.dayStatuses()) }
+        let result = await Task.detached(priority: .userInitiated) { () -> Result<[LogEntry], Error> in
+            Result { try store.entries() }
         }.value
         guard generation == reloadGeneration else { return }
         isLoading = false
         switch result {
-        case .success(let (records, statuses)): entries = records; dayStatuses = statuses
+        case .success(let records): entries = records
         case .failure(let failure): error = "读取失败：\(failure.localizedDescription)"
         }
     }
@@ -133,31 +133,11 @@ import UserNotifications
     func setDiscreet(_ value: Bool) {
         discreet = value; UserDefaults.standard.set(value, forKey: "discreet"); StorageLocation.sharedPreferences?.set(value, forKey: "discreet"); WidgetCenter.shared.reloadAllTimelines()
     }
-    func hasNoBowelMovement(on day: Date) -> Bool {
-        dayStatuses.contains { !$0.isCancelled && $0.matches(date: day, calendar: .current) }
-    }
-    func confirmNoBowelMovement(on day: Date) {
-        guard let store else { error = "存储暂不可用"; return }
-        do {
-            _ = try store.markNoBowelMovement(on: day, calendar: .current)
-            undoID = nil
-            toast = Calendar.current.isDateInToday(day) ? "已确认今天截至现在未排便" : "已确认当天未排便"
-            changed()
-        } catch { self.error = "确认未保存：\(error.localizedDescription)" }
-    }
-    func clearNoBowelMovement(on day: Date) {
-        guard let store else { error = "存储暂不可用"; return }
-        do { try store.clearNoBowelMovement(on: day, calendar: .current); toast = "已取消未排便确认"; changed() }
-        catch { self.error = "取消未保存：\(error.localizedDescription)" }
-    }
     func seed() throws {
         let calendar = Calendar.current
         for offset in [2, 3, 5, 6, 8, 9, 11, 13] {
             let date = calendar.date(bySettingHour: 8 + offset % 2, minute: 20, second: 0, of: calendar.date(byAdding: .day, value: -offset, to: Date())!)!
             try store?.insert(LogEntry(occurredAt: date, bristol: offset == 2 ? 1 : (offset == 3 ? 2 : 4), effort: offset == 2 ? "很费力" : (offset == 3 ? "有点费力" : "轻松"), symptoms: offset == 2 ? ["腹胀"] : nil))
-        }
-        if let yesterday = calendar.date(byAdding: .day, value: -1, to: Date()) {
-            _ = try store?.markNoBowelMovement(on: yesterday, calendar: calendar)
         }
     }
 }

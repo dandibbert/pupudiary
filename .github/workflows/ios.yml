@@ -42,6 +42,7 @@ jobs:
               PupudiaryUITests/PupudiaryUITests/testCancelThenReopenRecordDoesNotCreateEntry
               PupudiaryUITests/PupudiaryUITests/testDetailedRecordSavesWithOptionalFieldsEmpty
               PupudiaryUITests/PupudiaryUITests/testRecordKeyboardScrollAndNotePersistence
+              PupudiaryUITests/PupudiaryUITests/testEmptyDiaryHasNoInventedBowelInterval
           - shard: core
             device: iPhone 16 Pro
             tests: |

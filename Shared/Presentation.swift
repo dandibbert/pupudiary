@@ -53,22 +53,34 @@ struct PupuWidgetContent: View {
     let discreet: Bool
     let sharedAvailable: Bool
     var compact = false
+    var lastBristol: Int? = nil
+    var lastEffort: String? = nil
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
-            VStack(alignment: .leading, spacing: 8) {
-                Label("噗噗手帐", systemImage: "leaf").font(.caption.weight(.semibold)).foregroundStyle(PupuStyle.muted)
-                if discreet {
-                    Text("留一点时间\n给自己").font(.system(.title3, design: .rounded, weight: .bold)).foregroundStyle(PupuStyle.ink)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("排便记录").font(.caption.weight(.semibold)).foregroundStyle(PupuStyle.muted)
+                if !sharedAvailable {
+                    Text("在 App 内查看").font(.system(.headline, design: .rounded)).foregroundStyle(PupuStyle.ink)
+                    Text("共享空间未启用").font(.caption2).foregroundStyle(PupuStyle.muted)
+                } else if discreet {
+                    Text("内容已隐藏").font(.system(.headline, design: .rounded)).foregroundStyle(PupuStyle.ink)
                 } else {
-                    Text("今天 \(count) 次").font(.system(.title2, design: .rounded, weight: .bold)).foregroundStyle(PupuStyle.ink)
+                    Text("今天已记 \(count) 次").font(.system(.headline, design: .rounded, weight: .bold)).foregroundStyle(PupuStyle.ink)
                     if let last {
-                        Text("最近 \(last.formatted(date: Calendar.current.isDateInToday(last) ? .omitted : .abbreviated, time: .shortened))").font(.caption).foregroundStyle(PupuStyle.muted)
+                        Text("上次 \(last.formatted(.relative(presentation: .numeric)))").font(.caption).foregroundStyle(PupuStyle.muted)
                     } else {
-                        Text("想记的时候，轻轻一点").font(.caption).foregroundStyle(PupuStyle.muted)
+                        Text("尚无排便记录").font(.caption).foregroundStyle(PupuStyle.muted)
                     }
                 }
             }
-            if !compact { Spacer(minLength: 0); Dumpling().frame(width: 74, height: 85) }
+            if !compact, sharedAvailable, !discreet, last != nil {
+                Spacer(minLength: 0)
+                VStack(spacing: 3) {
+                    StoolIllustration(type: lastBristol).frame(width: 50, height: 35)
+                    Text(lastBristol == nil ? "形态未填" : BristolMetadata.label(for: lastBristol)).font(.caption2)
+                    if let lastEffort { Text(lastEffort).font(.caption2).foregroundStyle(PupuStyle.muted) }
+                }
+            }
         }.privacySensitive(!discreet)
     }
 }

@@ -28,7 +28,7 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
-                    HStack(spacing: 14) { Dumpling().frame(width: 61, height: 70); VStack(alignment: .leading, spacing: 5) { Text("噗噗手帐").font(.system(.title2, design: .rounded, weight: .bold)); Text("留一点时间给自己").font(.caption).foregroundStyle(PupuStyle.muted) } }
+                    HStack(spacing: 14) { Dumpling().frame(width: 61, height: 70); VStack(alignment: .leading, spacing: 5) { Text("噗噗手帐").font(.system(.title2, design: .rounded, weight: .bold)); Text("排便记录与健康观察").font(.caption).foregroundStyle(PupuStyle.muted) } }
                 }.listRowBackground(PupuStyle.sage)
                 Section("小组件") {
                     Toggle("隐私显示", isOn: Binding(get: { model.discreet }, set: model.setDiscreet))
@@ -36,7 +36,7 @@ struct SettingsView: View {
                     HStack(alignment: .top) { Image(systemName: model.sharedAvailable ? "checkmark.circle" : "info.circle"); Text(model.sharedAvailable ? "已连接共享手帐，支持小组件直接记录" : "当前签名未开放共享空间。App 可正常使用；小组件会打开 App 记录，不会单独保存一份数据。") }.font(.caption).foregroundStyle(PupuStyle.muted)
                 }
                 Section {
-                    Toggle("每天温柔提醒一次", isOn: Binding(get: { reminderEnabled }, set: setReminder))
+                    Toggle("每日记录提醒", isOn: Binding(get: { reminderEnabled }, set: setReminder))
                     if reminderEnabled {
                         DatePicker("提醒时间", selection: Binding(get: { reminderTime }, set: setReminderTime), displayedComponents: .hourAndMinute)
                     }
@@ -46,15 +46,19 @@ struct SettingsView: View {
                     Button { export(json: true) } label: { Label("导出完整 JSON 备份", systemImage: "square.and.arrow.up") }
                     Button { importing = true } label: { Label("从 JSON 备份恢复", systemImage: "square.and.arrow.down") }
                     NavigationLink { DeletedEntriesView() } label: { Label("最近删除", systemImage: "trash") }
-                } header: { Text("你的数据，由你保管") } footer: { Text("CSV 和 JSON 都包含现有及已删除记录，删除状态会标明。JSON 可用于完整恢复。导出文件含私人健康信息，请只分享给信任的人。导入只添加新记录，不覆盖已有记录。") }
+                } header: { Text("导出与备份") } footer: { Text("CSV 和 JSON 包含排便记录及已删除记录，删除状态会标明。JSON 可用于完整恢复。导出文件含私人健康信息，请只分享给信任的人。导入只添加新记录，不覆盖已有记录。") }
                 Section("隐私与说明") {
                     Label("无需账号，没有广告与分析追踪", systemImage: "person.crop.circle.badge.checkmark")
                     Label("不向开发者上传任何健康记录", systemImage: "lock.shield")
                     Text("数据保存在设备本地，可能随你的 iPhone 系统备份保存。卸载 App 可能丢失本地数据，请定期导出备份。此 App 不提供云同步。").font(.caption).foregroundStyle(PupuStyle.muted)
-                    Text("噗噗手帐是一款记录工具，不能诊断疾病或代替医护人员的建议。").font(.caption).foregroundStyle(PupuStyle.muted)
+                    Text("未排便时长与频次按记录计算，默认未记录即未排便；漏记后补记会自动更新。没有首次记录时不计算未排便天数。噗噗手帐不能诊断疾病或代替医护人员的建议。").font(.caption).foregroundStyle(PupuStyle.muted)
+                }
+                Section("健康信息来源") {
+                    Link("NIDDK：便秘的定义与表现", destination: URL(string: "https://www.niddk.nih.gov/health-information/digestive-diseases/constipation/definition-facts")!)
+                    Link("NHS：便秘说明", destination: URL(string: "https://www.nhs.uk/conditions/constipation/")!)
                 }
                 Section { Text("Pupudiary 1.0 · 原生 iOS 17+").font(.caption).foregroundStyle(PupuStyle.muted) }
-            }.scrollContentBackground(.hidden).paper().navigationTitle("我的手帐").navigationBarTitleDisplayMode(.inline)
+            }.scrollContentBackground(.hidden).paper().navigationTitle("设置").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
             .disabled(busy)
             .overlay {
@@ -147,7 +151,7 @@ struct SettingsView: View {
                     return
                 }
                 importData = data
-                importSummary = "已检查 \(validation.entryCount) 条记录。将添加 \(validation.newCount) 条，跳过 \(validation.existingCount) 条已有记录。现有内容不会被覆盖。"
+                importSummary = "已检查 \(validation.entryCount) 条排便记录。将添加 \(validation.newCount) 条，跳过 \(validation.existingCount) 条已有记录。现有内容不会被覆盖。"
                 confirmImport = true
             } catch { localError = "无法读取备份：\(error.localizedDescription)" }
         }
@@ -216,8 +220,8 @@ struct SettingsView: View {
                         throw ReminderError.permissionDenied
                     }
                     let content = UNMutableNotificationContent()
-                    content.title = "留一点时间给自己"
-                    content.body = "想记的时候，来噗噗手帐坐坐。"
+                    content.title = "噗噗手帐"
+                    content.body = "可以补充今天的记录。"
                     content.sound = .default
                     let trigger = UNCalendarNotificationTrigger(dateMatching: DateComponents(hour: hour, minute: minute), repeats: true)
                     try await center.add(UNNotificationRequest(identifier: "pupudiary.daily", content: content, trigger: trigger))
@@ -286,18 +290,18 @@ struct WidgetPreview: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 26) {
-                    Text("桌面上的小陪伴").font(.system(.largeTitle, design: .rounded, weight: .bold))
-                    Text(model.sharedAvailable ? "不必打开手帐，也能记下此刻" : "放一个入口，想记时轻轻一点").foregroundStyle(PupuStyle.muted)
+                    Text("排便记录小组件").font(.system(.largeTitle, design: .rounded, weight: .bold))
+                    Text(model.sharedAvailable ? "查看上次排便，一键记录" : "当前签名仅支持打开 App 记录").foregroundStyle(PupuStyle.muted)
                     VStack(alignment: .leading, spacing: 14) {
-                        PupuWidgetContent(count: model.today.count, last: model.entries.first?.occurredAt, discreet: !model.sharedAvailable, sharedAvailable: model.sharedAvailable)
-                        Label(model.sharedAvailable ? "记下此刻" : "打开 App 记录", systemImage: "plus").font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(11).background(PupuStyle.green, in: Capsule()).foregroundStyle(PupuStyle.onGreen)
+                        PupuWidgetContent(count: model.today.count, last: model.entries.first?.occurredAt, discreet: !model.sharedAvailable, sharedAvailable: model.sharedAvailable, lastBristol: model.entries.first?.bristol, lastEffort: model.entries.first?.effort)
+                        Label(model.sharedAvailable ? "记录排便" : "打开 App 记录", systemImage: "plus").font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(11).background(PupuStyle.green, in: Capsule()).foregroundStyle(PupuStyle.onGreen)
                     }.padding(20).background(PupuStyle.sage, in: RoundedRectangle(cornerRadius: 27))
                     HStack {
                         VStack(alignment: .leading, spacing: 16) {
                             PupuWidgetContent(count: 0, last: nil, discreet: true, sharedAvailable: model.sharedAvailable, compact: true)
                             Image(systemName: "plus").font(.title2).foregroundStyle(PupuStyle.onGreen).frame(width: 44, height: 44).background(PupuStyle.green, in: Circle())
                         }.padding(20).frame(maxWidth: 175, alignment: .leading).background(PupuStyle.peach, in: RoundedRectangle(cornerRadius: 27))
-                        VStack(alignment: .leading, spacing: 7) { Image(systemName: "eye.slash"); Text("也可以低调一点").font(.headline); Text("隐私模式隐藏次数与时间").font(.caption).foregroundStyle(PupuStyle.muted) }.padding(.leading, 9)
+                        VStack(alignment: .leading, spacing: 7) { Image(systemName: "eye.slash"); Text("隐私显示").font(.headline); Text("隐私模式隐藏次数与时间").font(.caption).foregroundStyle(PupuStyle.muted) }.padding(.leading, 9)
                     }
                     VStack(alignment: .leading, spacing: 14) {
                         Text("放到主屏幕").font(.headline)

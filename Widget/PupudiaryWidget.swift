@@ -8,6 +8,8 @@ struct DiaryTimelineEntry: TimelineEntry {
     let sharedAvailable: Bool
     let discreet: Bool
     let error: Bool
+    var lastBristol: Int? = nil
+    var lastEffort: String? = nil
 }
 struct DiaryProvider: TimelineProvider {
     func placeholder(in context: Context) -> DiaryTimelineEntry { DiaryTimelineEntry(date: Date(), count: 0, last: nil, sharedAvailable: true, discreet: false, error: false) }
@@ -29,7 +31,7 @@ struct DiaryProvider: TimelineProvider {
         do {
             let store = try DiaryStore(url: StorageLocation.database(in: directory))
             let summary = try store.summary(on: date)
-            return DiaryTimelineEntry(date: date, count: summary.count, last: summary.last?.occurredAt, sharedAvailable: true, discreet: discreet, error: false)
+            return DiaryTimelineEntry(date: date, count: summary.count, last: summary.last?.occurredAt, sharedAvailable: true, discreet: discreet, error: false, lastBristol: summary.last?.bristol, lastEffort: summary.last?.effort)
         } catch { return DiaryTimelineEntry(date: date, count: 0, last: nil, sharedAvailable: false, discreet: true, error: true) }
     }
 }
@@ -38,9 +40,9 @@ struct DiaryWidgetView: View {
     let entry: DiaryTimelineEntry
     var body: some View {
         VStack(alignment: .leading, spacing: family == .systemSmall ? 8 : 12) {
-            PupuWidgetContent(count: entry.count, last: entry.last, discreet: entry.discreet, sharedAvailable: entry.sharedAvailable, compact: family == .systemSmall)
+            PupuWidgetContent(count: entry.count, last: entry.last, discreet: entry.discreet, sharedAvailable: entry.sharedAvailable, compact: family == .systemSmall, lastBristol: entry.lastBristol, lastEffort: entry.lastEffort)
             if entry.sharedAvailable {
-                Button(intent: QuickLogIntent()) { Label("记下此刻", systemImage: "plus").font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 10) }.buttonStyle(.plain).background(PupuStyle.green, in: Capsule()).foregroundStyle(PupuStyle.onGreen)
+                Button(intent: QuickLogIntent()) { Label("记录排便", systemImage: "plus").font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 10) }.buttonStyle(.plain).background(PupuStyle.green, in: Capsule()).foregroundStyle(PupuStyle.onGreen)
             } else {
                 Link(destination: URL(string: "pupudiary://record")!) { Label("打开 App 记录", systemImage: "arrow.up.right").font(.caption.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 10) }.background(PupuStyle.green, in: Capsule()).foregroundStyle(PupuStyle.onGreen)
             }
@@ -51,7 +53,7 @@ struct DiaryWidgetView: View {
     let kind = "PupudiaryWidget"
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: DiaryProvider()) { entry in DiaryWidgetView(entry: entry) }
-            .configurationDisplayName("噗噗手帐").description("看看今天的记录，轻轻一点记下此刻。详情默认留空，可在 App 补充或撤销。")
+            .configurationDisplayName("噗噗手帐").description("查看上次排便与今天已记录次数，一键记录排便时间。详情默认留空，可在 App 补充或撤销。")
             .supportedFamilies([.systemSmall, .systemMedium])
     }
 }

@@ -1,9 +1,9 @@
 # Pupudiary · 噗噗手帐
 
-A small, calm SwiftUI bowel diary for iPhone. Record a moment with one tap, add details later, and keep useful context on a Home Screen widget.
+A native SwiftUI bowel diary for iPhone. See the time since the last logged bowel movement, seven-day frequency, stool shape and effort at a glance. Record a timestamp with one tap, then add optional details using original flat illustrations.
 
 - iOS 17+, native SwiftUI and WidgetKit
-- One-tap logging, optional detail fields, history, and recent-record undo
+- One-tap logging, visual Bristol selection, optional details, history, and recent-record undo
 - Shared local storage for app and interactive widget
 - Records stay on the device; no account or analytics service
 - Chinese-first interface, designed for comfortable everyday use
@@ -26,13 +26,15 @@ Select the shared `Pupudiary` scheme. For Simulator, no Apple Developer signing 
 
 Open this repository's [Actions runs](https://github.com/dandibbert/pupudiary/actions) and select a completed run:
 
-- `native-iphone-screenshots`: original native iPhone Simulator captures, with actual device/OS/pixel metadata
+- `native-redesign-preview`: short native home/form capture from the preview workflow
+- `intel-native-xctest-screenshots-*`: original native Simulator XCTest attachments from full validation, with actual device/OS/pixel metadata
 - `Pupudiary-unsigned-ipa`: unsigned arm64 IPA, checksum, entitlement templates and signing guide
-- `xcode-logs-and-tests`: build logs, selected toolchain/device information and XCTest result bundle
+- `native-redesign-preview-results` / `intel-xctest-results-and-logs-*`: full XCTest bundles and logs
+- `host-core-test-logs` / `device-build-logs`: independent core and packaging evidence
 
 Artifacts may require signing into GitHub and expire after the retention period. The unsigned IPA cannot install until it is signed/provisioned. The embedded WidgetKit extension is preserved; its App Group capability must be authorized by both profiles. See [Signing and installation](Docs/SIGNING.md) for an offline signed-IPA validator and app-only fallback limitations.
 
-Native screenshots are captured and uploaded before later test/package stages. Widget-preview captures show the same widget design **inside the app**; they do not establish actual Home Screen widget execution. See [Verification and screenshot provenance](Docs/VERIFICATION.md).
+The short preview workflow finalizes its native screenshots independently of the full validation matrix. Device packaging and core checks also run independently. Widget-preview captures show the same widget design **inside the app**; they do not establish actual Home Screen widget execution. See [Verification and screenshot provenance](Docs/VERIFICATION.md).
 
 ## Layout
 
@@ -47,3 +49,9 @@ Native screenshots are captured and uploaded before later test/package stages. W
 ## Privacy and backups
 
 Diary entries may contain sensitive health-related information. Keep exports, device backups, screenshots of real entries, and signing credentials private. CI screenshots use isolated demo records. Exported files are not automatically encrypted by this app; share or store them only where you intend. Removing the app can remove its local records, so preserve an export before reinstalling or changing signing/container identifiers.
+
+## Recording model
+
+The app assumes bowel movements are logged: days without an entry count as no bowel movement. The interval is calculated from the latest saved event; backfilled and edited records automatically recalculate it. Before the first event, no missing-day baseline is invented. No daily confirmation step is required.
+
+Descriptive “constipation-related signs” use actual logged hard/lumpy stool, effort, pain or incomplete-emptying details. The elapsed interval is not a diagnosis of constipation duration. References: [NIDDK](https://www.niddk.nih.gov/health-information/digestive-diseases/constipation/definition-facts), [NHS](https://www.nhs.uk/conditions/constipation/).
