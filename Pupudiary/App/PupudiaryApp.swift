@@ -20,7 +20,7 @@ struct PupudiaryApp: App {
 @Observable
 @MainActor
 final class Router {
-    enum Tab: Hashable { case home, history, stats, settings }
+    enum Tab: Hashable { case home, history, record, stats, settings }
 
     var tab: Tab = .home
     /// 弹出新建记录

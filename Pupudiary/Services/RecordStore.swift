@@ -9,6 +9,7 @@ final class RecordStore {
     private var loadedAt: TimeInterval = 0
 
     init() {
+        RecordStorage.migrateLocalDataIfNeeded()
         reload()
     }
 

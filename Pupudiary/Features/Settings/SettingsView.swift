@@ -110,6 +110,21 @@ struct SettingsView: View {
                     Text("所有数据只保存在这台手机上，不会上传。重新安装或更换签名前，记得先导出 JSON 备份。")
                 }
 
+                Section {
+                    LabeledContent {
+                        Text(AppGroup.isShared ? "已互通" : "未互通")
+                            .foregroundStyle(AppGroup.isShared ? GutStatus.ideal.color : Theme.warning)
+                    } label: {
+                        Label("小组件数据", systemImage: AppGroup.isShared ? "link.circle.fill" : "link.badge.plus")
+                    }
+                } header: {
+                    Text("小组件")
+                } footer: {
+                    Text(AppGroup.isShared
+                         ? "App Group：\(AppGroup.identifier)"
+                         : "签名里没有找到可用的 App Group（描述文件中：\(AppGroup.profileGroups.isEmpty ? "无" : AppGroup.profileGroups.joined(separator: ", "))）。")
+                }
+
                 Section("关于") {
                     Button {
                         showGuide = true
@@ -224,7 +239,7 @@ struct WidgetGuideView: View {
                     step(3, "控制中心（iOS 18+）", "下拉控制中心 → 左上角「＋」→ 添加控制 → 搜索「噗噗手帐」。")
                     step(4, "Siri / 操作按钮", "对 Siri 说「用噗噗手帐记一下」。iPhone 15 Pro 及以上可以在 设置 › 操作按钮 › 快捷指令 里选择「噗！记一下」。")
                     if !AppGroup.isShared {
-                        Label("当前签名没有包含 App Group，小组件可能无法读取 App 里的数据。请使用带 App Group 的描述文件重新签名（详见 README）。",
+                        Label("当前签名没有可用的 App Group，小组件和 App 的数据不互通。请用带 App Group 的证书重新签名，并保留小组件插件（详见 README）。",
                               systemImage: "exclamationmark.triangle.fill")
                             .font(.cute(13, .medium))
                             .foregroundStyle(Theme.warning)

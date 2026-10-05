@@ -4,26 +4,83 @@ import WidgetKit
 #endif
 
 /// App 与小组件共享的存储位置（App Group）
+///
+/// 自签工具（如 sign.lc、全能签）通常会把 App Group 换成证书里的 ID（例如 group.xxxx.1），
+/// 但不会改 Info.plist。所以这里在运行时从签名用的描述文件里找出真正可用的 App Group，
+/// App 和小组件按同样的规则选择，保证两边用的是同一个容器。
 enum AppGroup {
-    /// 从 Info.plist 读取，方便自签时改成自己的 App Group
-    static var identifier: String {
+    static let identifier: String = resolveIdentifier()
+
+    /// 当前是否真的在使用共享容器
+    static var isShared: Bool { sharedContainer != nil }
+
+    private static let sharedContainer: URL? =
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier)
+
+    /// 共享容器；没有可用的 App Group 时退回到自己的目录
+    static var containerURL: URL { sharedContainer ?? localContainer }
+
+    static var localContainer: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    }
+
+    static let defaults: UserDefaults =
+        (isShared ? UserDefaults(suiteName: identifier) : nil) ?? .standard
+
+    /// Info.plist 里写的（Xcode / resign.sh 编译时的值）
+    static var configuredIdentifier: String {
         (Bundle.main.object(forInfoDictionaryKey: "AppGroupID") as? String) ?? "group.com.pupudiary.app"
     }
 
-    /// 共享容器；如果签名里没有 App Group（部分自签工具），退回到 App 自己的目录
-    static var containerURL: URL {
-        if let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier) {
-            return url
+    /// 描述文件里声明的所有 App Group
+    static let profileGroups: [String] = {
+        for url in profileURLs {
+            if let groups = groups(inProfileAt: url), !groups.isEmpty { return groups }
         }
-        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return []
+    }()
+
+    private static func resolveIdentifier() -> String {
+        let configured = configuredIdentifier
+        let fm = FileManager.default
+        // 优先：Info.plist 里配置的，且确实可用
+        if profileGroups.isEmpty || profileGroups.contains(configured),
+           fm.containerURL(forSecurityApplicationGroupIdentifier: configured) != nil {
+            return configured
+        }
+        // 其次：描述文件里的 group，按名字排序后取第一个可用的（App 和小组件结果一致）
+        for g in profileGroups.sorted() where fm.containerURL(forSecurityApplicationGroupIdentifier: g) != nil {
+            return g
+        }
+        return configured
     }
 
-    static var isShared: Bool {
-        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier) != nil
+    /// 先看主 App 的描述文件（App 和小组件读同一份，选出的 group 一定相同），再看自己的
+    private static var profileURLs: [URL] {
+        var bundle = Bundle.main.bundleURL
+        var urls: [URL] = []
+        if bundle.pathExtension == "appex" {
+            let own = bundle.appendingPathComponent("embedded.mobileprovision")
+            bundle = bundle.deletingLastPathComponent().deletingLastPathComponent()
+            urls.append(bundle.appendingPathComponent("embedded.mobileprovision"))
+            urls.append(own)
+        } else {
+            urls.append(bundle.appendingPathComponent("embedded.mobileprovision"))
+        }
+        return urls
     }
 
-    static var defaults: UserDefaults {
-        UserDefaults(suiteName: identifier) ?? .standard
+    /// embedded.mobileprovision 是 CMS 签名包着的 XML plist，直接截出 plist 部分解析
+    private static func groups(inProfileAt url: URL) -> [String]? {
+        guard let data = try? Data(contentsOf: url),
+              let start = data.range(of: Data("<?xml".utf8)),
+              let end = data.range(of: Data("</plist>".utf8), in: start.lowerBound..<data.endIndex)
+        else { return nil }
+        let plistData = data.subdata(in: start.lowerBound..<end.upperBound)
+        guard let plist = try? PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any],
+              let ent = plist["Entitlements"] as? [String: Any]
+        else { return nil }
+        return ent["com.apple.security.application-groups"] as? [String]
     }
 }
 
@@ -38,6 +95,23 @@ enum RecordStorage {
     }
 
     static var fileURL: URL { directory.appendingPathComponent("records.json") }
+
+    /// 以前没连上 App Group 时保存在 App 自己目录里的数据，连上后自动并入共享容器（只做一次）
+    static func migrateLocalDataIfNeeded() {
+        guard AppGroup.isShared else { return }
+        let local = AppGroup.localContainer
+            .appendingPathComponent("Pupudiary", isDirectory: true)
+            .appendingPathComponent("records.json")
+        guard local != fileURL, FileManager.default.fileExists(atPath: local.path) else { return }
+        let old = decode(at: local)
+        if !old.isEmpty {
+            mutate { list in
+                let ids = Set(list.map(\.id))
+                list.append(contentsOf: old.filter { !ids.contains($0.id) })
+            }
+        }
+        try? FileManager.default.moveItem(at: local, to: local.appendingPathExtension("migrated"))
+    }
 
     static let encoder: JSONEncoder = {
         let e = JSONEncoder()
