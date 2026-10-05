@@ -13,20 +13,23 @@ import UserNotifications
     @Published var showSettings = false
     @Published var showWidgetPreview = false
     @Published var editing: LogEntry?
-    @Published var discreet = StorageLocation.sharedPreferences?.bool(forKey: "discreet") ?? false
+    @Published var discreet = UserDefaults.standard.bool(forKey: "discreet")
     private(set) var store: DiaryStore?
     let isUITesting: Bool
+    let isUnitTesting: Bool
     var today: [LogEntry] { entries.filter { Calendar.current.isDateInToday($0.occurredAt) } }
     init() {
         #if targetEnvironment(simulator)
         isUITesting = ProcessInfo.processInfo.arguments.contains("--uitesting")
+        isUnitTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         #else
         isUITesting = false
+        isUnitTesting = false
         #endif
         do {
             sharedAvailable = StorageLocation.sharedDirectory != nil
             let directory: URL
-            if isUITesting {
+            if isUITesting || isUnitTesting {
                 directory = FileManager.default.temporaryDirectory.appendingPathComponent("pupu-ui-\(UUID().uuidString)")
             } else {
                 if !sharedAvailable && UserDefaults.standard.bool(forKey: "hasUsedSharedStorage") {
@@ -35,8 +38,9 @@ import UserNotifications
                 directory = StorageLocation.sharedDirectory ?? StorageLocation.privateDirectory
             }
             store = try DiaryStore(url: StorageLocation.database(in: directory))
-            if !isUITesting, sharedAvailable {
+            if !isUITesting, !isUnitTesting, sharedAvailable {
                 UserDefaults.standard.set(true, forKey: "hasUsedSharedStorage")
+                StorageLocation.sharedPreferences?.set(discreet, forKey: "discreet")
                 if !UserDefaults.standard.bool(forKey: "privateMigrationCompleted") {
                     do {
                         let oldURL = StorageLocation.privateDirectory.appendingPathComponent("diary.sqlite")
@@ -90,13 +94,13 @@ import UserNotifications
             changed(); return true
         } catch { self.error = "没有保存成功：\(error.localizedDescription)"; return false }
     }
-    func delete(_ entry: LogEntry) {
-        guard let store else { error = "存储暂不可用"; return }
-        do { try store.softDelete(id: entry.id); toast = "移入最近删除，随时可以恢复"; changed() }
-        catch { self.error = error.localizedDescription }
+    func delete(_ entry: LogEntry) -> Bool {
+        guard let store else { error = "存储暂不可用"; return false }
+        do { try store.softDelete(id: entry.id); toast = "移入最近删除，随时可以恢复"; changed(); return true }
+        catch { self.error = error.localizedDescription; return false }
     }
     func setDiscreet(_ value: Bool) {
-        discreet = value; StorageLocation.sharedPreferences?.set(value, forKey: "discreet"); WidgetCenter.shared.reloadAllTimelines()
+        discreet = value; UserDefaults.standard.set(value, forKey: "discreet"); StorageLocation.sharedPreferences?.set(value, forKey: "discreet"); WidgetCenter.shared.reloadAllTimelines()
     }
     func seed() throws {
         let calendar = Calendar.current

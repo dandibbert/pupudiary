@@ -371,6 +371,74 @@ final class CoreTests: XCTestCase {
         throw XCTSkip("This integration test requires a Debug iOS simulator build with an App Group container; device and Release builds have no storage override.")
         #endif
     }
+
+    func testSummaryUsesHalfOpenBoundariesOnTwentyThreeHourSpringDSTDay() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        let start = try XCTUnwrap(DiaryDate.parse("2026-03-08T00:00:00-05:00"))
+        let end = try XCTUnwrap(DiaryDate.parse("2026-03-09T00:00:00-04:00"))
+        XCTAssertEqual(end.timeIntervalSince(start), 23 * 3_600)
+        let store = try DiaryStore(url: databaseURL)
+        for date in [start.addingTimeInterval(-0.001), start, end.addingTimeInterval(-0.001), end] {
+            try store.insert(makeEntry(at: date))
+        }
+        let summary = try store.summary(on: start.addingTimeInterval(12 * 3_600), calendar: calendar)
+        XCTAssertEqual(summary.count, 2, "Include start, exclude the following local midnight")
+        XCTAssertEqual(summary.last?.occurredAt, end, "Latest is global, not restricted to the requested day")
+    }
+
+    func testSummaryCountsBothRepeatedHoursOnTwentyFiveHourFallDSTDay() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        let start = try XCTUnwrap(DiaryDate.parse("2026-11-01T00:00:00-04:00"))
+        let end = try XCTUnwrap(DiaryDate.parse("2026-11-02T00:00:00-05:00"))
+        let firstOneThirty = try XCTUnwrap(DiaryDate.parse("2026-11-01T01:30:00-04:00"))
+        let secondOneThirty = try XCTUnwrap(DiaryDate.parse("2026-11-01T01:30:00-05:00"))
+        XCTAssertEqual(end.timeIntervalSince(start), 25 * 3_600)
+        let store = try DiaryStore(url: databaseURL)
+        let dates = [start.addingTimeInterval(-0.001), start, firstOneThirty, secondOneThirty, end.addingTimeInterval(-0.001), end]
+        for date in dates { try store.insert(makeEntry(at: date)) }
+        let summary = try store.summary(on: secondOneThirty, calendar: calendar)
+        XCTAssertEqual(summary.count, 4)
+        XCTAssertEqual(summary.last?.occurredAt, end)
+    }
+
+    func testSummaryIgnoresDeletedRowsAndCanReturnPreviousDaysLatest() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let noon = try XCTUnwrap(DiaryDate.parse("2026-10-05T12:00:00Z"))
+        let previous = try XCTUnwrap(DiaryDate.parse("2026-10-04T23:00:00Z"))
+        let store = try DiaryStore(url: databaseURL)
+        let empty = try store.summary(on: noon, calendar: calendar)
+        XCTAssertEqual(empty.count, 0)
+        XCTAssertNil(empty.last)
+        let previousEntry = try store.insert(makeEntry(at: previous))
+        let today = try store.insert(makeEntry(at: noon))
+        XCTAssertEqual(try store.summary(on: noon, calendar: calendar).count, 1)
+        try store.softDelete(id: today.id, at: noon.addingTimeInterval(60))
+        let summary = try store.summary(on: noon, calendar: calendar)
+        XCTAssertEqual(summary.count, 0)
+        XCTAssertEqual(summary.last, previousEntry)
+    }
+
+    func testSummaryDecodesOnlyLatestPayloadWithoutLoadingFullHistory() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let store = try DiaryStore(url: databaseURL)
+        let older = try store.insert(makeEntry())
+        let latest = try store.insert(makeEntry(at: epoch.addingTimeInterval(60)))
+        var raw: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(databaseURL.path, &raw), SQLITE_OK)
+        defer { sqlite3_close_v2(raw) }
+        // Corrupt only the older payload in this isolated test database. A
+        // full-history decode would throw; the widget-sized query must not.
+        let damageOlderPayload = "UPDATE entries SET payload = x'7b7d' WHERE id = '\(older.id.uuidString)'"
+        XCTAssertEqual(sqlite3_exec(raw, damageOlderPayload, nil, nil, nil), SQLITE_OK)
+        let summary = try store.summary(on: epoch, calendar: calendar)
+        XCTAssertEqual(summary.count, 2)
+        XCTAssertEqual(summary.last, latest)
+        XCTAssertThrowsError(try store.entries())
+    }
 }
 
 /// Test-only collection avoids concurrent mutation of a captured array.

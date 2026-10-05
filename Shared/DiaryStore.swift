@@ -32,6 +32,12 @@ struct QuickLogResult: Sendable {
     let wasInserted: Bool
 }
 
+struct DiarySummary: Sendable {
+    let count: Int
+    /// Latest active entry across all days, not only the requested local day.
+    let last: LogEntry?
+}
+
 struct RestoreResult: Sendable {
     let insertedCount: Int
     let skippedCount: Int
@@ -176,6 +182,38 @@ final class DiaryStore: @unchecked Sendable {
 
     func entry(id: UUID) throws -> LogEntry? {
         try synchronized { try find(id) }
+    }
+
+    /// Widget-sized read: SQLite counts active entries in the local day's
+    /// half-open [start, end) interval and decodes only the latest active row.
+    /// Calendar supplies DST-aware boundaries (a day can be 23 or 25 hours).
+    /// A read transaction keeps count and last on one cross-process snapshot.
+    func summary(on date: Date = Date(), calendar: Calendar = .current) throws -> DiarySummary {
+        try synchronized {
+            guard date.timeIntervalSince1970.isFinite,
+                  let day = calendar.dateInterval(of: .day, for: date) else {
+                throw DiaryStoreError.invalidEntry("The selected local day could not be determined.")
+            }
+            try execute("BEGIN DEFERRED TRANSACTION")
+            do {
+                let count = try scalarInt("""
+                    SELECT COUNT(*) FROM entries
+                    WHERE deleted_at IS NULL AND occurred_at >= ? AND occurred_at < ?
+                    """, bind: { statement in
+                        try self.check(sqlite3_bind_double(statement, 1, day.start.timeIntervalSince1970))
+                        try self.check(sqlite3_bind_double(statement, 2, day.end.timeIntervalSince1970))
+                    })
+                let last = try queryEntries("""
+                    SELECT payload FROM entries WHERE deleted_at IS NULL
+                    ORDER BY occurred_at DESC, id ASC LIMIT 1
+                    """).first
+                try execute("COMMIT")
+                return DiarySummary(count: count, last: last)
+            } catch {
+                try? execute("ROLLBACK")
+                throw error
+            }
+        }
     }
 
     /// Optimistic concurrency prevents a stale editor from overwriting a newer
@@ -397,9 +435,10 @@ final class DiaryStore: @unchecked Sendable {
         guard code == SQLITE_DONE else { throw databaseError(code) }
     }
 
-    private func scalarInt(_ sql: String) throws -> Int {
+    private func scalarInt(_ sql: String, bind: ((OpaquePointer) throws -> Void)? = nil) throws -> Int {
         let statement = try prepare(sql)
         defer { sqlite3_finalize(statement) }
+        try bind?(statement)
         let code = sqlite3_step(statement)
         guard code == SQLITE_ROW else { throw databaseError(code) }
         return Int(sqlite3_column_int64(statement, 0))

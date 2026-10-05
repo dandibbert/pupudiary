@@ -22,8 +22,8 @@ struct DiaryProvider: TimelineProvider {
         guard let directory = StorageLocation.sharedDirectory else { return DiaryTimelineEntry(date: Date(), count: 0, last: nil, sharedAvailable: false, discreet: true, error: false) }
         do {
             let store = try DiaryStore(url: StorageLocation.database(in: directory))
-            let entries = try store.entries()
-            return DiaryTimelineEntry(date: Date(), count: entries.filter { Calendar.current.isDateInToday($0.occurredAt) }.count, last: entries.first?.occurredAt, sharedAvailable: true, discreet: discreet, error: false)
+            let summary = try store.summary()
+            return DiaryTimelineEntry(date: Date(), count: summary.count, last: summary.last?.occurredAt, sharedAvailable: true, discreet: discreet, error: false)
         } catch { return DiaryTimelineEntry(date: Date(), count: 0, last: nil, sharedAvailable: false, discreet: true, error: true) }
     }
 }

@@ -8,6 +8,7 @@ import SwiftUI
             RootView().environmentObject(model)
                 .tint(PupuStyle.green)
                 .environment(\.locale, Locale(identifier: "zh_Hans_CN"))
+                .modifier(TestTypography(enabled: model.isUITesting && ProcessInfo.processInfo.arguments.contains("--large-type")))
                 .onChange(of: scenePhase) { _, phase in if phase == .active { model.reload() } }
                 .onOpenURL { url in if url.scheme == "pupudiary", url.host == "record" { model.showRecord = true } }
         }
@@ -25,7 +26,7 @@ struct RootView: View {
         .sheet(item: $model.editing) { entry in RecordView(entry: entry) }
         .sheet(isPresented: $model.showSettings) { SettingsView() }
         .sheet(isPresented: $model.showWidgetPreview) { WidgetPreview() }
-        .alert("温柔提醒", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
+        .alert("温柔提醒", isPresented: Binding(get: { model.error != nil && !model.showRecord && model.editing == nil && !model.showSettings && !model.showWidgetPreview }, set: { if !$0 { model.error = nil } })) {
             Button("知道了", role: .cancel) { model.error = nil }
         } message: { Text(model.error ?? "") }
     }
@@ -121,7 +122,7 @@ struct HomeView: View {
                             ForEach(model.today.prefix(4)) { entry in Button { model.editing = entry } label: { EntryRow(entry: entry) }.buttonStyle(.plain) }
                         }
                     }
-                    HStack(spacing: 6) { Image(systemName: "lock.shield"); Text("你的日常，只留在你的设备里") }.font(.caption2).foregroundStyle(PupuStyle.muted).frame(maxWidth: .infinity)
+                    HStack(spacing: 6) { Image(systemName: "lock.shield"); Text("无需账号 · 记录保存在本机") }.font(.caption2).foregroundStyle(PupuStyle.muted).frame(maxWidth: .infinity)
                 }.padding(.horizontal, 22).padding(.top, 16).padding(.bottom, 28)
             }.paper().toolbar(.hidden, for: .navigationBar)
         }
@@ -158,5 +159,13 @@ struct EntryRow: View {
             Spacer(minLength: 2)
             Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(PupuStyle.muted)
         }.diaryCard().accessibilityElement(children: .combine)
+    }
+}
+
+private struct TestTypography: ViewModifier {
+    @Environment(\.dynamicTypeSize) private var inherited
+    let enabled: Bool
+    func body(content: Content) -> some View {
+        content.environment(\.dynamicTypeSize, enabled ? .accessibility3 : inherited)
     }
 }

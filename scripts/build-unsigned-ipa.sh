@@ -24,3 +24,5 @@ shasum -a 256 build/ipa/Pupudiary-unsigned.ipa > build/ipa/SHA256SUMS.txt
 cp Config/App.entitlements build/ipa/App.entitlements
 cp Config/Widget.entitlements build/ipa/Widget.entitlements
 cp Docs/SIGNING.md build/ipa/SIGNING.md
+
+cp Docs/安装与使用.md build/ipa/安装与使用.md

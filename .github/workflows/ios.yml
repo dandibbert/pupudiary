@@ -63,9 +63,27 @@ jobs:
       # Capture/upload early. Subsequent UI testing or device compilation cannot hide these artifacts.
       - name: Capture native iPhone app screens
         id: screenshots
-        run: scripts/capture-screenshots.sh 2>&1 | tee build/logs/screenshots.log
+        timeout-minutes: 6
+        run: scripts/capture-screenshots.sh build/simulator-selection.json build/DerivedData/Build/Products/Debug-iphonesimulator/Pupudiary.app build/screenshots primary 2>&1 | tee build/logs/screenshots.log
 
       - name: Upload native screenshots immediately
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-iphone-primary-preview
+          path: |
+            build/screenshots/
+            build/simulator-selection.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Capture compact iPhone screens
+        id: compact_screenshots
+        timeout-minutes: 6
+        if: ${{ !cancelled() && steps.simulator_build.outcome == 'success' }}
+        run: scripts/capture-screenshots.sh build/simulator-selection.json build/DerivedData/Build/Products/Debug-iphonesimulator/Pupudiary.app build/screenshots compact 2>&1 | tee build/logs/compact-screenshots.log
+
+      - name: Upload all native screenshot variants
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -78,7 +96,8 @@ jobs:
 
       - name: Run core and UI tests
         id: tests
-        if: ${{ !cancelled() && steps.simulator_build.outcome == 'success' }}
+        timeout-minutes: 10
+        if: ${{ !cancelled() && steps.screenshots.outcome == 'success' }}
         run: |
           set -o pipefail
           xcodebuild -project Pupudiary.xcodeproj -scheme Pupudiary -configuration Debug \
@@ -86,20 +105,6 @@ jobs:
             -derivedDataPath build/DerivedData -resultBundlePath build/Pupudiary.xcresult \
             -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO test \
             2>&1 | tee build/logs/tests.log
-
-      - name: Build and validate unsigned device IPA with widget
-        id: ipa
-        if: ${{ !cancelled() && steps.project.outcome == 'success' }}
-        run: scripts/build-unsigned-ipa.sh
-
-      - name: Upload unsigned IPA and signing instructions
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Pupudiary-unsigned-ipa
-          path: build/ipa/
-          if-no-files-found: warn
-          retention-days: 30
 
       - name: Upload Xcode logs and test results even after failure
         if: always()
@@ -119,7 +124,6 @@ jobs:
           SIM_STATUS: ${{ steps.simulator_build.outcome }}
           SCREEN_STATUS: ${{ steps.screenshots.outcome }}
           TEST_STATUS: ${{ steps.tests.outcome }}
-          IPA_STATUS: ${{ steps.ipa.outcome }}
           DEVICE_NAME: ${{ steps.devices.outputs.primary_name }}
           DEVICE_OS: ${{ steps.devices.outputs.primary_os }}
           COMPACT_NAME: ${{ steps.devices.outputs.compact_name }}
@@ -130,10 +134,53 @@ jobs:
             echo "- Simulator build: $SIM_STATUS"
             echo "- Native app screenshots: $SCREEN_STATUS"
             echo "- Unit / UI tests: $TEST_STATUS"
-            echo "- Unsigned arm64 IPA packaging / validation: $IPA_STATUS"
+            echo "- Unsigned IPA builds independently in the device-ipa job"
             echo "- Primary: $DEVICE_NAME / iOS $DEVICE_OS"
             echo "- Compact: $COMPACT_NAME / iOS $COMPACT_OS"
             echo '- Widget preview screenshots are app-hosted previews, not SpringBoard integration evidence.'
             echo '- The unsigned IPA is not installable until both app and extension are provisioned and signed.'
             echo '- Real-device widget data sharing requires matching App Group entitlements in both profiles and signatures.'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  device-ipa:
+    name: Unsigned device IPA
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare device toolchain
+        run: |
+          mkdir -p build/logs build/ipa
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version | tee build/logs/xcode-version.txt
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          xcodegen generate
+      - name: Build and validate unsigned device IPA with widget
+        id: ipa
+        timeout-minutes: 15
+        run: scripts/build-unsigned-ipa.sh
+      - name: Upload unsigned IPA and signing instructions
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pupudiary-unsigned-ipa
+          path: build/ipa/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Upload device build and validation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-build-logs
+          path: build/logs/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Summarize device artifact
+        if: always()
+        env:
+          IPA_STATUS: ${{ steps.ipa.outcome }}
+        run: |
+          echo "Unsigned arm64 IPA build / validation: $IPA_STATUS" >> "$GITHUB_STEP_SUMMARY"
+          echo 'App and widget require authorized signing before installation.' >> "$GITHUB_STEP_SUMMARY"

@@ -68,7 +68,7 @@ This is read-only/offline verification. It checks ZIP structure, iPhone arm64 pl
 
 ## If App Groups are unavailable
 
-Pupudiary can keep app-only records in its private app container when the shared container cannot be opened. The app makes the sharing limitation visible. **The widget cannot read or write those private records.** Its interactive logging must not show false success when the group is unavailable.
+On a first app-only install, Pupudiary can keep records in its private app container when no shared container is available. If this installation previously used shared storage and subsequently loses access, it blocks new writes rather than silently forking the diary; restore the original App Group signing capability. The app makes the sharing limitation visible. **The widget cannot read or write those private records.** Its interactive logging must not show false success when the group is unavailable.
 
 An app-only fallback requires a genuinely valid signature/profile combination. If the profile does not authorize App Groups, the signer must omit that unsupported entitlement from **both** signatures; leaving an unauthorized entitlement may prevent installation. The validator rejects missing sharing capability by default. To acknowledge the limitation explicitly:
 

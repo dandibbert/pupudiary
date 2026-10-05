@@ -62,7 +62,7 @@ struct PupuWidgetContent: View {
                 } else {
                     Text("今天 \(count) 次").font(.system(.title2, design: .rounded, weight: .bold)).foregroundStyle(PupuStyle.ink)
                     if let last {
-                        Text("最近 \(last.formatted(date: .omitted, time: .shortened))").font(.caption).foregroundStyle(PupuStyle.muted)
+                        Text("最近 \(last.formatted(date: Calendar.current.isDateInToday(last) ? .omitted : .abbreviated, time: .shortened))").font(.caption).foregroundStyle(PupuStyle.muted)
                     } else {
                         Text("想记的时候，轻轻一点").font(.caption).foregroundStyle(PupuStyle.muted)
                     }

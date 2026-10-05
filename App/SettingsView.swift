@@ -158,7 +158,7 @@ struct WidgetPreview: View {
                     Text("桌面上的小陪伴").font(.system(.largeTitle, design: .rounded, weight: .bold))
                     Text("不必打开手帐，也能记下此刻").foregroundStyle(PupuStyle.muted)
                     VStack(alignment: .leading, spacing: 14) {
-                        PupuWidgetContent(count: model.today.count, last: model.entries.first?.occurredAt, discreet: false, sharedAvailable: model.sharedAvailable)
+                        PupuWidgetContent(count: model.today.count, last: model.entries.first?.occurredAt, discreet: !model.sharedAvailable, sharedAvailable: model.sharedAvailable)
                         Label(model.sharedAvailable ? "记下此刻" : "打开 App 记录", systemImage: "plus").font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(11).background(PupuStyle.green, in: Capsule()).foregroundStyle(PupuStyle.onGreen)
                     }.padding(20).background(PupuStyle.sage, in: RoundedRectangle(cornerRadius: 27))
                     HStack {

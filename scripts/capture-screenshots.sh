@@ -6,8 +6,58 @@ cd "$ROOT"
 SELECTION="${1:-build/simulator-selection.json}"
 APP="${2:-build/DerivedData/Build/Products/Debug-iphonesimulator/Pupudiary.app}"
 OUTPUT="${3:-build/screenshots}"
+FILTER="${4:-all}"
 mkdir -p "$OUTPUT"
 [[ -d "$APP" ]] || { echo "Simulator app not found: $APP" >&2; exit 1; }
+# Keep runner stalls bounded and identify the exact command in retained logs.
+run_simctl() {
+  local limit="$1"; shift
+  python3 - "$limit" "${udid:-}" "$@" <<'PY'
+import datetime, os, pathlib, signal, subprocess, sys, time
+limit, device = int(sys.argv[1]), sys.argv[2]
+args = ['xcrun', 'simctl'] + sys.argv[3:]
+label = ' '.join(args)
+def stamp(message):
+    print(datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'), message, flush=True)
+def invoke(command, seconds, capture=False):
+    process = subprocess.Popen(command, start_new_session=True,
+        stdout=subprocess.PIPE if capture else None, stderr=subprocess.STDOUT if capture else None)
+    try:
+        output, _ = process.communicate(timeout=seconds)
+        return process.returncode, output or b''
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        output, _ = process.communicate()
+        return 124, output or b''
+stamp(f'BEGIN timeout={limit}s {label}')
+started = time.monotonic()
+code, _ = invoke(args, limit)
+stamp(f'END exit={code} elapsed={time.monotonic()-started:.1f}s {label}')
+# Terminating an app that is not running is benign; a timeout never is.
+if code and not (sys.argv[3] == 'terminate' and code != 124):
+    stamp('SIMULATOR FAILURE: collecting bounded diagnostics; existing captures are retained')
+    checks = [['xcrun', 'simctl', 'list', 'devices']]
+    if device:
+        checks.append(['xcrun', 'simctl', 'spawn', device, 'log', 'show', '--last', '2m', '--style', 'compact',
+            '--predicate', 'process == "SpringBoard" OR process == "Pupudiary" OR process == "installd"'])
+    for check in checks:
+        stamp('DIAGNOSTIC ' + ' '.join(check))
+        diagnostic_code, output = invoke(check, 8, capture=True)
+        print('\n'.join(output.decode(errors='replace').splitlines()[-100:]), flush=True)
+        stamp(f'DIAGNOSTIC exit={diagnostic_code}')
+    log = pathlib.Path.home() / 'Library/Logs/CoreSimulator' / device / 'system.log'
+    if log.is_file():
+        print('\n'.join(log.read_text(errors='replace').splitlines()[-100:]), flush=True)
+    stamp(f'EXPLICIT FAILURE exit={code}: {label}')
+sys.exit(code)
+PY
+}
+terminate_app() {
+  local code=0
+  run_simctl 30 terminate "$udid" com.dandibbert.pupudiary || code=$?
+  # Nonzero for an already stopped app is expected. Do not hide a stalled command.
+  [[ "$code" != 124 ]] || exit "$code"
+}
 python3 - "$SELECTION" <<'PY' > "$OUTPUT/devices.tsv"
 import json, sys
 seen = set()
@@ -18,22 +68,36 @@ for role, device in json.load(open(sys.argv[1])).items():
     print('\t'.join([role, device['udid'], device['name'], device['os']]))
 PY
 while IFS=$'\t' read -r role udid name os; do
+  [[ "$FILTER" == "all" || "$FILTER" == "$role" ]] || continue
   echo "Capturing $name / iOS $os ($udid)"
-  # boot is idempotent at the workflow level; a previously booted device returns nonzero.
-  xcrun simctl boot "$udid" || true
-  xcrun simctl bootstatus "$udid" -b
-  xcrun simctl status_bar "$udid" override --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 --batteryState charged --batteryLevel 100
-  xcrun simctl ui "$udid" appearance light
-  xcrun simctl install "$udid" "$APP"
-  for screen in home record widget-preview; do
-    xcrun simctl terminate "$udid" com.dandibbert.pupudiary >/dev/null 2>&1 || true
-    xcrun simctl launch "$udid" com.dandibbert.pupudiary --uitesting --screen "$screen"
+  # bootstatus -b starts an unbooted simulator and also waits for readiness.
+  run_simctl 180 bootstatus "$udid" -b
+  run_simctl 30 status_bar "$udid" override --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 --batteryState charged --batteryLevel 100
+  run_simctl 30 ui "$udid" appearance light
+  run_simctl 60 install "$udid" "$APP"
+  for screen in home record widget-preview history trends; do
+    terminate_app
+    run_simctl 60 launch "$udid" com.dandibbert.pupudiary --uitesting --screen "$screen"
     # Allow initial SwiftUI layout, sheet presentation and rendering to settle.
     sleep 3
-    xcrun simctl io "$udid" screenshot "$OUTPUT/${role}-${screen}.png"
+    run_simctl 30 io "$udid" screenshot "$OUTPUT/${role}-${screen}.png"
   done
-  xcrun simctl terminate "$udid" com.dandibbert.pupudiary >/dev/null 2>&1 || true
-  xcrun simctl shutdown "$udid"
+  if [[ "$role" == "primary" ]]; then
+    run_simctl 30 ui "$udid" appearance dark
+    terminate_app
+    run_simctl 60 launch "$udid" com.dandibbert.pupudiary --uitesting --screen home
+    sleep 3
+    run_simctl 30 io "$udid" screenshot "$OUTPUT/${role}-home-dark.png"
+    run_simctl 30 ui "$udid" appearance light
+    for screen in home record; do
+      terminate_app
+      run_simctl 60 launch "$udid" com.dandibbert.pupudiary --uitesting --screen "$screen" --large-type
+      sleep 3
+      run_simctl 30 io "$udid" screenshot "$OUTPUT/${role}-${screen}-large-type.png"
+    done
+  fi
+  terminate_app
+  run_simctl 30 shutdown "$udid"
 done < "$OUTPUT/devices.tsv"
 python3 - "$SELECTION" "$OUTPUT" <<'PY'
 import json, struct, sys

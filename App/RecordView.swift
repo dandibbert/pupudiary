@@ -84,8 +84,11 @@ struct RecordView: View {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.accessibilityIdentifier("cancel-record") }
                 ToolbarItem(placement: .confirmationAction) { Button("保存") { save() }.fontWeight(.semibold).accessibilityIdentifier("save-record") }
             }
+            .alert("请检查一下", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
+                Button("知道了", role: .cancel) { model.error = nil }
+            } message: { Text(model.error ?? "") }
             .confirmationDialog("把这条记录移入最近删除？", isPresented: $deleteConfirmation, titleVisibility: .visible) {
-                Button("移入最近删除", role: .destructive) { if let entry { model.delete(entry); dismiss() } }
+                Button("移入最近删除", role: .destructive) { if let entry, model.delete(entry) { dismiss() } }
             } message: { Text("记录不会永久删除，可以在设置中恢复。") }
         }
     }
