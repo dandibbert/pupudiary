@@ -1,0 +1,134 @@
+name: iOS build, screenshots and unsigned IPA
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-ios:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record toolchain and available simulators
+        run: |
+          mkdir -p build/logs build/screenshots build/ipa
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version | tee build/logs/xcode-version.txt
+          xcodebuild -showsdks | tee build/logs/sdks.txt
+          xcrun simctl list devices available --json > build/logs/simulators.json
+          xcrun simctl list runtimes --json > build/logs/runtimes.json
+          sw_vers | tee build/logs/macos-version.txt
+
+      - name: Test portable build and validation tooling
+        run: python3 scripts/test-build-tools.py
+
+      - name: Install XcodeGen and generate project
+        id: project
+        run: |
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          xcodegen --version | tee build/logs/xcodegen-version.txt
+          xcodegen generate
+          xcodebuild -list -project Pupudiary.xcodeproj | tee build/logs/project.txt
+
+      - name: Select actual installed Pro and compact iPhones
+        id: devices
+        run: python3 scripts/select-simulators.py build/logs/simulators.json build/simulator-selection.json
+
+      - name: Build native simulator app
+        id: simulator_build
+        run: |
+          set -o pipefail
+          xcodebuild -project Pupudiary.xcodeproj -scheme Pupudiary \
+            -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO build \
+            2>&1 | tee build/logs/simulator-build.log
+
+      # Capture/upload early. Subsequent UI testing or device compilation cannot hide these artifacts.
+      - name: Capture native iPhone app screens
+        id: screenshots
+        run: scripts/capture-screenshots.sh 2>&1 | tee build/logs/screenshots.log
+
+      - name: Upload native screenshots immediately
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-iphone-screenshots
+          path: |
+            build/screenshots/
+            build/simulator-selection.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Run core and UI tests
+        id: tests
+        if: ${{ !cancelled() && steps.simulator_build.outcome == 'success' }}
+        run: |
+          set -o pipefail
+          xcodebuild -project Pupudiary.xcodeproj -scheme Pupudiary -configuration Debug \
+            -destination 'platform=iOS Simulator,id=${{ steps.devices.outputs.primary_udid }}' \
+            -derivedDataPath build/DerivedData -resultBundlePath build/Pupudiary.xcresult \
+            -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO test \
+            2>&1 | tee build/logs/tests.log
+
+      - name: Build and validate unsigned device IPA with widget
+        id: ipa
+        if: ${{ !cancelled() && steps.project.outcome == 'success' }}
+        run: scripts/build-unsigned-ipa.sh
+
+      - name: Upload unsigned IPA and signing instructions
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pupudiary-unsigned-ipa
+          path: build/ipa/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload Xcode logs and test results even after failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcode-logs-and-tests
+          path: |
+            build/logs/
+            build/Pupudiary.xcresult/
+            build/simulator-selection.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Summarize verified stages
+        if: always()
+        env:
+          SIM_STATUS: ${{ steps.simulator_build.outcome }}
+          SCREEN_STATUS: ${{ steps.screenshots.outcome }}
+          TEST_STATUS: ${{ steps.tests.outcome }}
+          IPA_STATUS: ${{ steps.ipa.outcome }}
+          DEVICE_NAME: ${{ steps.devices.outputs.primary_name }}
+          DEVICE_OS: ${{ steps.devices.outputs.primary_os }}
+          COMPACT_NAME: ${{ steps.devices.outputs.compact_name }}
+          COMPACT_OS: ${{ steps.devices.outputs.compact_os }}
+        run: |
+          {
+            echo '## Pupudiary native iOS verification'
+            echo "- Simulator build: $SIM_STATUS"
+            echo "- Native app screenshots: $SCREEN_STATUS"
+            echo "- Unit / UI tests: $TEST_STATUS"
+            echo "- Unsigned arm64 IPA packaging / validation: $IPA_STATUS"
+            echo "- Primary: $DEVICE_NAME / iOS $DEVICE_OS"
+            echo "- Compact: $COMPACT_NAME / iOS $COMPACT_OS"
+            echo '- Widget preview screenshots are app-hosted previews, not SpringBoard integration evidence.'
+            echo '- The unsigned IPA is not installable until both app and extension are provisioned and signed.'
+            echo '- Real-device widget data sharing requires matching App Group entitlements in both profiles and signatures.'
+          } >> "$GITHUB_STEP_SUMMARY"

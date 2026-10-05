@@ -1,0 +1,116 @@
+name: Pupudiary
+options:
+  bundleIdPrefix: com.dandibbert
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "26.3"
+  developmentLanguage: zh-Hans
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    SWIFT_EMIT_LOC_STRINGS: YES
+    SUPPORTS_MACCATALYST: NO
+    SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+    GENERATE_INFOPLIST_FILE: NO
+    CLANG_ENABLE_MODULES: YES
+  configs:
+    Debug:
+      SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+    Release:
+      SWIFT_COMPILATION_MODE: wholemodule
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
+targets:
+  Pupudiary:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+      - path: Shared
+      - path: Config/PrivacyInfo.xcprivacy
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.dandibbert.pupudiary
+        PRODUCT_NAME: Pupudiary
+        INFOPLIST_FILE: Config/App-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Config/App.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - sdk: libsqlite3.tbd
+      - target: PupudiaryWidgetExtension
+        embed: true
+        codeSign: true
+    attributes:
+      SystemCapabilities:
+        com.apple.ApplicationGroups.iOS:
+          enabled: 1
+  PupudiaryWidgetExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Widget
+      - path: Shared
+      - path: Config/PrivacyInfo.xcprivacy
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.dandibbert.pupudiary.widget
+        PRODUCT_NAME: PupudiaryWidgetExtension
+        INFOPLIST_FILE: Config/Widget-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Config/Widget.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+    dependencies:
+      - sdk: libsqlite3.tbd
+    attributes:
+      SystemCapabilities:
+        com.apple.ApplicationGroups.iOS:
+          enabled: 1
+  PupudiaryCoreTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/CoreTests.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.dandibbert.pupudiary.coretests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: Pupudiary
+  PupudiaryUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Tests/PupudiaryUITests.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.dandibbert.pupudiary.uitests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: Pupudiary
+schemes:
+  Pupudiary:
+    build:
+      targets:
+        Pupudiary: all
+        PupudiaryWidgetExtension: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: true
+      targets:
+        - name: PupudiaryCoreTests
+          parallelizable: false
+        - name: PupudiaryUITests
+          parallelizable: false
+    archive:
+      config: Release
