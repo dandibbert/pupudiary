@@ -47,6 +47,7 @@ jobs:
         run: |
           mkdir -p build/Payload
           cp -R build/Pupudiary.xcarchive/Products/Applications/Pupudiary.app build/Payload/
+          test -d build/Payload/Pupudiary.app/PlugIns/PupudiaryWidget.appex || { echo "widget extension missing"; exit 1; }
           (cd build && zip -qry Pupudiary-unsigned.ipa Payload)
           ls -lh build/Pupudiary-unsigned.ipa
 
