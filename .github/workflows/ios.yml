@@ -2,8 +2,13 @@ name: iOS build, screenshots and unsigned IPA
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
 
 permissions:
   contents: read

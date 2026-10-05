@@ -17,8 +17,9 @@ mkdir -p "$STAGING/Payload"
 ditto "$APP" "$STAGING/Payload/Pupudiary.app"
 # Preserve the complete app bundle and PlugIns; never strip the widget to make signing easier.
 rm -f "$ROOT/build/ipa/Pupudiary-unsigned.ipa"
-(cd "$STAGING" && /usr/bin/zip -q -r -y "$ROOT/build/ipa/Pupudiary-unsigned.ipa" Payload)
-python3 scripts/validate-ipa.py build/ipa/Pupudiary-unsigned.ipa --unsigned | tee build/logs/ipa-validation.log
+(cd "$STAGING" && /usr/bin/zip -q -r -y "$STAGING/Pupudiary-unsigned.ipa" Payload)
+python3 scripts/validate-ipa.py "$STAGING/Pupudiary-unsigned.ipa" --unsigned | tee build/logs/ipa-validation.log
+mv "$STAGING/Pupudiary-unsigned.ipa" build/ipa/Pupudiary-unsigned.ipa
 shasum -a 256 build/ipa/Pupudiary-unsigned.ipa > build/ipa/SHA256SUMS.txt
 cp Config/App.entitlements build/ipa/App.entitlements
 cp Config/Widget.entitlements build/ipa/Widget.entitlements

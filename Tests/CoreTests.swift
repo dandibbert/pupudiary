@@ -329,6 +329,48 @@ final class CoreTests: XCTestCase {
         XCTAssertNil(DiaryDate.parse("2026-10-05T12:00:00+25:00"))
         XCTAssertNotNil(DiaryDate.parse("2028-02-29T12:00:00Z"))
     }
+
+    func testQuickLogIntentPersistsIntoIsolatedAppGroupAndOpenAppConnectionSeesIt() async throws {
+        #if DEBUG && targetEnvironment(simulator)
+        guard let sharedDirectory = StorageLocation.sharedDirectory else {
+            throw XCTSkip("App Group entitlement/container is unavailable in this simulator signing configuration. The test will not use production storage or a private fallback.")
+        }
+        let isolatedDirectory = sharedDirectory
+            .appendingPathComponent("PupudiaryCoreTests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: isolatedDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: isolatedDirectory) }
+        let url = try StorageLocation.database(in: isolatedDirectory)
+        // Open an app-side connection before the intent writes on its own
+        // connection, then verify a fresh read observes the committed result.
+        var appReader: DiaryStore? = try DiaryStore(url: url)
+        defer { appReader = nil }
+        XCTAssertTrue(try XCTUnwrap(appReader).entries().isEmpty)
+        let earliest = Date().addingTimeInterval(-1)
+        try await QuickLogIntent.$testingDirectory.withValue(isolatedDirectory) {
+            _ = try await QuickLogIntent().perform()
+        }
+        let entries = try XCTUnwrap(appReader).entries()
+        XCTAssertEqual(entries.count, 1)
+        let saved = try XCTUnwrap(entries.first)
+        XCTAssertGreaterThanOrEqual(saved.occurredAt, earliest)
+        XCTAssertLessThanOrEqual(saved.occurredAt, Date().addingTimeInterval(1))
+        XCTAssertNil(saved.bristol)
+        XCTAssertNil(saved.color)
+        XCTAssertNil(saved.amount)
+        XCTAssertNil(saved.effort)
+        XCTAssertNil(saved.symptoms)
+        XCTAssertNil(saved.durationMinutes)
+        XCTAssertNil(saved.note)
+        XCTAssertNil(saved.deletedAt)
+        // Reopening verifies persistence beyond the live reader's lifetime.
+        appReader = nil
+        appReader = try DiaryStore(url: url)
+        XCTAssertEqual(try XCTUnwrap(appReader).entries(), [saved])
+        #else
+        throw XCTSkip("This integration test requires a Debug iOS simulator build with an App Group container; device and Release builds have no storage override.")
+        #endif
+    }
 }
 
 /// Test-only collection avoids concurrent mutation of a captured array.

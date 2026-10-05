@@ -42,7 +42,7 @@ struct SettingsView: View {
                     Button { export(json: true) } label: { Label("导出完整 JSON 备份", systemImage: "square.and.arrow.up") }
                     Button { importing = true } label: { Label("从 JSON 备份恢复", systemImage: "square.and.arrow.down") }
                     NavigationLink { DeletedEntriesView() } label: { Label("最近删除", systemImage: "trash") }
-                } header: { Text("你的数据，由你保管") } footer: { Text("CSV 包含现有记录；JSON 备份包含可恢复的删除记录。导出文件含私人健康信息，请只分享给信任的人。导入只添加新记录，不覆盖已有记录。") }
+                } header: { Text("你的数据，由你保管") } footer: { Text("CSV 和 JSON 都包含现有及已删除记录，删除状态会标明。JSON 可用于完整恢复。导出文件含私人健康信息，请只分享给信任的人。导入只添加新记录，不覆盖已有记录。") }
                 Section("隐私与说明") {
                     Label("无需账号，没有广告与分析追踪", systemImage: "person.crop.circle.badge.checkmark")
                     Label("不向开发者上传任何健康记录", systemImage: "lock.shield")
@@ -81,7 +81,10 @@ struct SettingsView: View {
             let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
             let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
             guard size <= 10 * 1024 * 1024 else { localError = "备份过大，请选择 10 MB 以内的 JSON 备份"; return }
-            let data = try Data(contentsOf: url)
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            let data = try handle.read(upToCount: 10 * 1024 * 1024 + 1) ?? Data()
+            guard data.count <= 10 * 1024 * 1024 else { localError = "备份超过 10 MB，无法导入"; return }
             let validation = store.validateBackup(data)
             guard validation.isValid else { localError = "这份备份无法导入：\n" + validation.errors.prefix(3).joined(separator: "\n"); return }
             importData = data
@@ -90,11 +93,11 @@ struct SettingsView: View {
         } catch { localError = "无法读取备份：\(error.localizedDescription)" }
     }
     private func restore() {
-        guard let data = importData else { return }
+        guard let data = importData, let store = model.store else { localError = "存储暂不可用，尚未导入"; return }
         do {
-            let result = try model.store?.mergeJSON(data)
+            let result = try store.mergeJSON(data)
             model.changed(); importData = nil
-            localError = "恢复完成：添加 \(result?.insertedCount ?? 0) 条，保留原有 \(result?.skippedCount ?? 0) 条"
+            localError = "恢复完成：添加 \(result.insertedCount) 条，保留原有 \(result.skippedCount) 条"
         } catch { localError = "没有导入任何记录：\(error.localizedDescription)" }
     }
     private func setReminder(_ value: Bool) {

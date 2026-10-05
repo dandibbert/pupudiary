@@ -28,13 +28,26 @@ import UserNotifications
             let directory: URL
             if isUITesting {
                 directory = FileManager.default.temporaryDirectory.appendingPathComponent("pupu-ui-\(UUID().uuidString)")
-            } else { directory = StorageLocation.sharedDirectory ?? StorageLocation.privateDirectory }
+            } else {
+                if !sharedAvailable && UserDefaults.standard.bool(forKey: "hasUsedSharedStorage") {
+                    throw NSError(domain: "Pupudiary", code: 1, userInfo: [NSLocalizedDescriptionKey: "原来的共享手帐暂时无法访问。为避免生成不一致的数据，请恢复带 App Group 的签名后重试。"])
+                }
+                directory = StorageLocation.sharedDirectory ?? StorageLocation.privateDirectory
+            }
             store = try DiaryStore(url: StorageLocation.database(in: directory))
             if !isUITesting, sharedAvailable {
-                let oldURL = StorageLocation.privateDirectory.appendingPathComponent("diary.sqlite")
-                if FileManager.default.fileExists(atPath: oldURL.path) {
-                    let old = try DiaryStore(url: oldURL)
-                    _ = try store?.mergeJSON(old.exportJSON())
+                UserDefaults.standard.set(true, forKey: "hasUsedSharedStorage")
+                if !UserDefaults.standard.bool(forKey: "privateMigrationCompleted") {
+                    do {
+                        let oldURL = StorageLocation.privateDirectory.appendingPathComponent("diary.sqlite")
+                        if FileManager.default.fileExists(atPath: oldURL.path) {
+                            let old = try DiaryStore(url: oldURL)
+                            _ = try store?.mergeJSON(old.exportJSON())
+                        }
+                        UserDefaults.standard.set(true, forKey: "privateMigrationCompleted")
+                    } catch {
+                        self.error = "当前手帐仍可使用，旧的本机记录尚未迁移：\(error.localizedDescription)"
+                    }
                 }
             }
             if isUITesting { try seed() }
@@ -56,7 +69,8 @@ import UserNotifications
     func changed() { reload(); WidgetCenter.shared.reloadAllTimelines() }
     func quickSave() {
         do {
-            guard let result = try store?.quickLog() else { return }
+            guard let store else { self.error = "手帐存储暂不可用，请检查设置中的共享空间状态"; return }
+            let result = try store.quickLog()
             undoID = result.entry.id
             toast = result.wasInserted ? "记好啦，详情可以慢慢补" : "刚刚已经记下啦"
             changed()

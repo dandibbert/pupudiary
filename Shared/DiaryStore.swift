@@ -286,12 +286,25 @@ final class DiaryStore: @unchecked Sendable {
         let headers = ["id", "occurred_at_utc", "created_at_utc", "updated_at_utc", "bristol", "color", "amount", "effort", "symptoms", "duration_minutes", "note", "deleted_at_utc"]
         var rows = [headers.map(Self.csvCell).joined(separator: ",")]
         for entry in records {
-            let symptomText = try entry.symptoms.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) } ?? ""
-            let cells = [
-                entry.id.uuidString, DiaryDate.string(entry.occurredAt), DiaryDate.string(entry.createdAt), DiaryDate.string(entry.updatedAt),
-                entry.bristol.map(String.init) ?? "", entry.color ?? "", entry.amount ?? "", entry.effort ?? "", symptomText,
-                entry.durationMinutes.map(String.init) ?? "", entry.note ?? "", entry.deletedAt.map(DiaryDate.string) ?? ""
-            ]
+            let symptomText: String
+            if let symptoms = entry.symptoms {
+                let encodedSymptoms = try JSONEncoder().encode(symptoms)
+                symptomText = String(decoding: encodedSymptoms, as: UTF8.self)
+            } else { symptomText = "" }
+            var cells: [String] = []
+            cells.reserveCapacity(12)
+            cells.append(entry.id.uuidString)
+            cells.append(DiaryDate.string(entry.occurredAt))
+            cells.append(DiaryDate.string(entry.createdAt))
+            cells.append(DiaryDate.string(entry.updatedAt))
+            cells.append(entry.bristol.map { String($0) } ?? "")
+            cells.append(entry.color ?? "")
+            cells.append(entry.amount ?? "")
+            cells.append(entry.effort ?? "")
+            cells.append(symptomText)
+            cells.append(entry.durationMinutes.map { String($0) } ?? "")
+            cells.append(entry.note ?? "")
+            cells.append(entry.deletedAt.map { DiaryDate.string($0) } ?? "")
             rows.append(cells.map(Self.csvCell).joined(separator: ","))
         }
         return Data((rows.joined(separator: "\r\n") + "\r\n").utf8)

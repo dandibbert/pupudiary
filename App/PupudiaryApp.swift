@@ -7,6 +7,7 @@ import SwiftUI
         WindowGroup {
             RootView().environmentObject(model)
                 .tint(PupuStyle.green)
+                .environment(\.locale, Locale(identifier: "zh_Hans_CN"))
                 .onChange(of: scenePhase) { _, phase in if phase == .active { model.reload() } }
                 .onOpenURL { url in if url.scheme == "pupudiary", url.host == "record" { model.showRecord = true } }
         }
