@@ -2,6 +2,7 @@ import SwiftUI
 
 struct HistoryView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var month = Date()
     @State private var selectedDate: Date?
     @State private var query = ""
@@ -23,6 +24,12 @@ struct HistoryView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 20) {
                     VStack(spacing: 17) {
+                        if typeSize.isAccessibilitySize {
+                            Text("按日期查看").font(.headline).frame(maxWidth: .infinity, alignment: .leading)
+                            DatePicker("日期", selection: Binding(get: { selectedDate ?? Date() }, set: { selectedDate = $0 }), displayedComponents: .date)
+                                .datePickerStyle(.compact)
+                            Button("显示全部记录") { selectedDate = nil }.frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
                         HStack {
                             Button { moveMonth(-1) } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }.accessibilityLabel("上个月")
                             Spacer()
@@ -44,6 +51,7 @@ struct HistoryView: View {
                                     }.accessibilityLabel("\(day.formatted(date: .complete, time: .omitted))，\(count) 条记录").accessibilityAddTraits(active ? .isSelected : [])
                                 } else { Color.clear.frame(height: 44) }
                             }
+                        }
                         }
                     }.diaryCard()
                     HStack {

@@ -119,17 +119,50 @@ jobs:
             [[ -z "$selected" ]] || tests+=("-only-testing:$selected")
           done <<< "$PUPU_TESTS"
           printf 'Selected test: %s\n' "${tests[@]}"
-          # xcodebuild owns simulator lifecycle. No manual simctl boot/status_bar/ui/terminate.
-          xcodebuild test -project Pupudiary.xcodeproj -scheme Pupudiary \
-            -configuration Debug -sdk iphonesimulator \
-            -destination 'platform=iOS Simulator,id=${{ steps.device.outputs.udid }},arch=x86_64' \
-            -destination-timeout 120 \
-            -derivedDataPath build/IntelDerivedData \
-            -resultBundlePath build/intel/Pupudiary-Intel.xcresult \
-            -parallel-testing-enabled NO \
-            "${tests[@]}" \
-            CODE_SIGNING_ALLOWED=NO ARCHS=x86_64 ONLY_ACTIVE_ARCH=YES \
-            2>&1 | tee build/intel/logs/xcodebuild-tests.log
+          # Only a runner killed before any test case starts qualifies for one retry.
+          # Keep pipe statuses before any other command changes PIPESTATUS under -e.
+          run_tests() {
+            local result_path="$1" log_path="$2"
+            set +e
+            xcodebuild test -project Pupudiary.xcodeproj -scheme Pupudiary \
+              -configuration Debug -sdk iphonesimulator \
+              -destination 'platform=iOS Simulator,id=${{ steps.device.outputs.udid }},arch=x86_64' \
+              -destination-timeout 120 \
+              -derivedDataPath build/IntelDerivedData \
+              -resultBundlePath "$result_path" \
+              -parallel-testing-enabled NO \
+              "${tests[@]}" \
+              CODE_SIGNING_ALLOWED=NO ARCHS=x86_64 ONLY_ACTIVE_ARCH=YES \
+              2>&1 | tee "$log_path"
+            local pipeline_codes=("${PIPESTATUS[@]}")
+            set -e
+            TEST_EXIT="${pipeline_codes[0]}"
+            if [[ "${pipeline_codes[1]}" -ne 0 ]]; then
+              echo 'Failed to retain xcodebuild output; do not retry without complete logs.' >&2
+              exit "${pipeline_codes[1]}"
+            fi
+            return 0
+          }
+          RESULT=build/intel/Pupudiary-Intel.xcresult
+          LOG=build/intel/logs/xcodebuild-tests.log
+          run_tests "$RESULT" "$LOG"
+          printf 'attempt=1 xcodebuild_exit=%s\n' "$TEST_EXIT" > build/intel/logs/test-attempts.log
+          if [[ "$TEST_EXIT" -ne 0 ]] \
+            && grep -Eiq 'Early unexpected exit|operation never finished bootstrapping' "$LOG" \
+            && grep -Eiq 'Test crashed with signal kill before establishing connection|signal (SIGKILL|9).*before establishing connection' "$LOG" \
+            && ! grep -Eiq 'Test [Cc]ase .* (started|passed|failed)|XCTAssert.*failed|Assertion [Ff]ail|Assertion failed' "$LOG"; then
+            echo 'Retrying once: XCTest bootstrap connection was killed before any test case started.' | tee -a build/intel/logs/test-attempts.log
+            # Preserve the failed bundle/log. Retry gets the original, now-clean result path.
+            if [[ -d "$RESULT" ]]; then
+              mv "$RESULT" build/intel/Pupudiary-Intel-first-attempt.xcresult
+            fi
+            mv "$LOG" build/intel/logs/xcodebuild-tests-first-attempt.log
+            run_tests "$RESULT" "$LOG"
+            printf 'attempt=2 xcodebuild_exit=%s\n' "$TEST_EXIT" >> build/intel/logs/test-attempts.log
+          else
+            echo 'No automatic retry: first attempt succeeded or was not a pre-test bootstrap kill.' >> build/intel/logs/test-attempts.log
+          fi
+          exit "$TEST_EXIT"
 
       - name: Export every available native attachment and test summary
         id: export
@@ -191,6 +224,7 @@ jobs:
           name: intel-xctest-results-and-logs-${{ matrix.shard }}
           path: |
             build/intel/Pupudiary-Intel.xcresult/
+            build/intel/Pupudiary-Intel-first-attempt.xcresult/
             build/intel/logs/
             build/intel/device.json
             build/intel/test-summary.json

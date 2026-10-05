@@ -2,6 +2,7 @@ import SwiftUI
 
 struct TrendsView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var days = 7
     private var period: [LogEntry] {
         let start = Calendar.current.date(byAdding: .day, value: 1 - days, to: Calendar.current.startOfDay(for: Date()))!
@@ -23,6 +24,17 @@ struct TrendsView: View {
                     }
                     VStack(alignment: .leading, spacing: 18) {
                         SectionHeading(title: "每天的记录", detail: "次数")
+                        if typeSize.isAccessibilitySize {
+                            ForEach(0..<days, id: \.self) { offset in
+                                let date = Calendar.current.date(byAdding: .day, value: offset + 1 - days, to: Date())!
+                                let count = dayCounts[Calendar.current.startOfDay(for: date)] ?? 0
+                                HStack(alignment: .firstTextBaseline) {
+                                    Text(date, format: .dateTime.month().day())
+                                    Spacer(minLength: 8)
+                                    Text("\(count) 次").monospacedDigit()
+                                }.font(.body).padding(.vertical, 4).accessibilityElement(children: .combine)
+                            }
+                        } else {
                         HStack(alignment: .bottom, spacing: days == 7 ? 13 : 3) {
                             ForEach(0..<days, id: \.self) { offset in
                                 let date = Calendar.current.date(byAdding: .day, value: offset + 1 - days, to: Date())!
@@ -33,17 +45,26 @@ struct TrendsView: View {
                                     if days == 7 { Text(date, format: .dateTime.day()).font(.caption2).foregroundStyle(PupuStyle.muted) }
                                 }.frame(maxWidth: .infinity).accessibilityElement(children: .ignore).accessibilityLabel("\(date.formatted(date: .abbreviated, time: .omitted))，\(count) 次")
                             }
-                        }.frame(height: 133, alignment: .bottom)
+                        }.frame(minHeight: 133, alignment: .bottom)
+                        }
                         Text("未记录不等于没有发生，图表仅展示已保存的记录").font(.caption2).foregroundStyle(PupuStyle.muted)
                     }.diaryCard()
                     VStack(alignment: .leading, spacing: 17) {
                         SectionHeading(title: "形态分布", detail: "已填写 \(records.filter { $0.bristol != nil }.count) 条")
                         ForEach(1...7, id: \.self) { type in
                             let count = records.filter { $0.bristol == type }.count
+                            if typeSize.isAccessibilitySize {
+                                HStack(alignment: .firstTextBaseline) {
+                                    Text("类型 \(type)")
+                                    Spacer(minLength: 8)
+                                    Text("\(count) 条").monospacedDigit()
+                                }.font(.body).accessibilityElement(children: .combine)
+                            } else {
                             HStack(spacing: 11) {
                                 Text("类型 \(type)").font(.caption).frame(width: 46, alignment: .leading)
                                 GeometryReader { g in ZStack(alignment: .leading) { Capsule().fill(PupuStyle.sage.opacity(0.5)); Capsule().fill(PupuStyle.green.opacity(0.75)).frame(width: records.isEmpty ? 0 : g.size.width * CGFloat(count) / CGFloat(max(1, records.count))) } }.frame(height: 10)
                                 Text("\(count)").font(.caption.monospacedDigit()).frame(width: 22, alignment: .trailing)
+                            }
                             }
                         }
                         Text("未填写形态：\(records.filter { $0.bristol == nil }.count) 条").font(.caption).foregroundStyle(PupuStyle.muted)
