@@ -1,0 +1,175 @@
+name: Independent Intel native UI validation
+on:
+  push:
+    branches: [ci/intel-ui-validation]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: intel-ui-validation
+  cancel-in-progress: true
+jobs:
+  # Integration: add this independent job beneath the existing workflow's jobs: mapping.
+  # First append /tmp/pupudiary-capture-test.swift to Tests/PupudiaryUITests.swift.
+  # The proposal is not active until the parent applies and pushes it.
+  intel-xctest-recovery:
+    name: Intel native XCTest screenshots
+    runs-on: macos-15-intel
+    timeout-minutes: 22
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+  
+      - name: Verify Intel toolchain, native runtime and export command syntax
+        id: device
+        timeout-minutes: 3
+        run: |
+          mkdir -p build/intel/logs build/intel/attachments
+          test "$(uname -m)" = x86_64
+          test -d "$DEVELOPER_DIR"
+          uname -m | tee build/intel/logs/host-architecture.txt
+          sw_vers | tee build/intel/logs/macos-version.txt
+          xcodebuild -version | tee build/intel/logs/xcode-version.txt
+          xcrun simctl list devices available --json > build/intel/logs/simulators.json
+          xcrun simctl list runtimes --json > build/intel/logs/runtimes.json
+          # Verify against the selected Xcode's actual CLI help before using either command.
+          xcrun xcresulttool export attachments --help > build/intel/logs/attachment-export-help.txt 2>&1
+          cat build/intel/logs/attachment-export-help.txt
+          grep -q -- '--path' build/intel/logs/attachment-export-help.txt
+          grep -q -- '--output-path' build/intel/logs/attachment-export-help.txt
+          xcrun xcresulttool get test-results summary --help > build/intel/logs/test-summary-help.txt 2>&1
+          python3 - <<'PY'
+          import json, os
+          inventory = json.load(open('build/intel/logs/simulators.json'))
+          runtime = 'com.apple.CoreSimulator.SimRuntime.iOS-18-6'
+          matches = [d for d in inventory.get('devices', {}).get(runtime, [])
+                     if d.get('isAvailable') and d.get('name') == 'iPhone 16 Pro']
+          assert matches, 'Required installed iPhone 16 Pro / iOS 18.6 is unavailable; refusing to relabel another device'
+          device = sorted(matches, key=lambda d: d['udid'])[0]
+          selected = {'device': device['name'], 'udid': device['udid'], 'runtime': runtime,
+                      'iOS': '18.6', 'host_architecture': 'x86_64', 'capture': 'Native iPhone Simulator XCTest'}
+          with open('build/intel/device.json', 'w') as f: json.dump(selected, f, indent=2)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f: print('udid=' + device['udid'], file=f)
+          print(json.dumps(selected, indent=2))
+          PY
+  
+      - name: Generate native app and XCTest project
+        timeout-minutes: 4
+        run: |
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          xcodegen generate
+          grep -q 'test00CaptureNativeScreensForRecovery' Tests/PupudiaryUITests.swift
+          xcodebuild -project Pupudiary.xcodeproj -scheme Pupudiary -showdestinations \
+            > build/intel/logs/destinations.txt 2>&1
+          cat build/intel/logs/destinations.txt
+  
+      - name: Let XCTest boot, install and launch the native iPhone app
+        id: tests
+        timeout-minutes: 12
+        run: |
+          set -o pipefail
+          # xcodebuild owns simulator lifecycle. No manual simctl boot/status_bar/ui/terminate.
+          xcodebuild test -project Pupudiary.xcodeproj -scheme Pupudiary \
+            -configuration Debug -sdk iphonesimulator \
+            -destination 'platform=iOS Simulator,id=${{ steps.device.outputs.udid }},arch=x86_64' \
+            -destination-timeout 120 \
+            -derivedDataPath build/IntelDerivedData \
+            -resultBundlePath build/intel/Pupudiary-Intel.xcresult \
+            -parallel-testing-enabled NO \
+            -only-testing:PupudiaryCoreTests -only-testing:PupudiaryUITests \
+            CODE_SIGNING_ALLOWED=NO ARCHS=x86_64 ONLY_ACTIVE_ARCH=YES \
+            2>&1 | tee build/intel/logs/xcodebuild-tests.log
+  
+      - name: Export real XCTest screenshot attachments and summary
+        id: export
+        if: always()
+        timeout-minutes: 2
+        run: |
+          set -o pipefail
+          RESULT=build/intel/Pupudiary-Intel.xcresult
+          if [[ ! -d "$RESULT" ]]; then
+            echo 'No xcresult bundle was produced; native launch/screenshot success is not established.' | tee build/intel/logs/export.log
+            exit 1
+          fi
+          # Supported spelling is checked against this job's selected Xcode CLI help above.
+          xcrun xcresulttool export attachments --path "$RESULT" \
+            --output-path build/intel/attachments 2>&1 | tee build/intel/logs/export.log
+          xcrun xcresulttool get test-results summary --path "$RESULT" \
+            > build/intel/test-summary.json
+          cat > build/intel/attachments/PROVENANCE.txt <<'TXT'
+          Original XCTest attachments from a native iPhone 16 Pro / iOS 18.6 Simulator on an Intel runner.
+          See device.json, attachment manifest, accessibility-hierarchy attachments and full xcresult for evidence.
+          The widget-preview image is an app-hosted native preview, not a SpringBoard/widget-integration test.
+          Artifact existence alone is not a pass: inspect the test summary and screenshot pixels.
+          No image has been resized or replaced with a Mac/web mockup.
+          TXT
+          find build/intel/attachments -type f -name '*.png' -print | tee build/intel/logs/exported-pngs.txt
+          python3 - <<'PY'
+          import json, struct
+          from pathlib import Path
+          root = Path('build/intel/attachments')
+          manifest = json.loads((root / 'manifest.json').read_text())
+          def dictionaries(value):
+              if isinstance(value, dict):
+                  yield value
+                  for child in value.values(): yield from dictionaries(child)
+              elif isinstance(value, list):
+                  for child in value: yield from dictionaries(child)
+          attachments = list(dictionaries(manifest))
+          proof = []
+          for screen in ('home', 'record', 'widget-preview-app-hosted'):
+              wanted = 'Pupudiary-native-' + screen
+              matches = [item for item in attachments
+                         if wanted in item.get('suggestedHumanReadableName', '')
+                         and item.get('exportedFileName', '').lower().endswith('.png')]
+              assert matches, 'Missing named native screenshot attachment: ' + wanted
+              item = matches[0]
+              image = root / item['exportedFileName']
+              data = image.read_bytes()
+              assert data[:8] == b'\x89PNG\r\n\x1a\n' and len(data) > 8000, str(image)
+              width, height = struct.unpack('>II', data[16:24])
+              assert width > 200 and height > 200
+              proof.append({'screen': screen, 'file': item['exportedFileName'],
+                            'width': width, 'height': height, 'origin': 'XCUIScreen.main.screenshot()'})
+          (root / 'capture-proof.json').write_text(json.dumps(proof, indent=2))
+          print(json.dumps(proof, indent=2))
+          PY
+  
+      - name: Upload native Intel screenshots immediately
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: intel-native-xctest-screenshots
+          path: |
+            build/intel/attachments/
+            build/intel/device.json
+            build/intel/test-summary.json
+          if-no-files-found: warn
+          retention-days: 30
+  
+      - name: Preserve full Intel test bundle and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: intel-xctest-results-and-logs
+          path: |
+            build/intel/Pupudiary-Intel.xcresult/
+            build/intel/logs/
+            build/intel/device.json
+            build/intel/test-summary.json
+          if-no-files-found: warn
+          retention-days: 14
+  
+      - name: Report native test and attachment outcomes
+        if: always()
+        env:
+          TEST_STATUS: ${{ steps.tests.outcome }}
+          EXPORT_STATUS: ${{ steps.export.outcome }}
+        run: |
+          echo "Intel iPhone Simulator XCTest result: $TEST_STATUS" >> "$GITHUB_STEP_SUMMARY"
+          echo "Native attachment export: $EXPORT_STATUS" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Target: actual iPhone 16 Pro / iOS 18.6; widget preview is app-hosted.' >> "$GITHUB_STEP_SUMMARY"

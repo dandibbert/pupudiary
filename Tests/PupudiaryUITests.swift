@@ -82,3 +82,44 @@ final class PupudiaryUITests: XCTestCase {
         expectCount(initial)
     }
 }
+
+// Integration: append this extension to the existing Tests/PupudiaryUITests.swift.
+// Do not put it in an unreferenced source file: project.yml currently names that file explicitly.
+// This exercises a real iPhone Simulator under XCTest. No simctl control or mock rendering.
+extension PupudiaryUITests {
+    @MainActor
+    @objc func test00CaptureNativeScreensForRecovery() throws {
+        // Existing setUpWithError launches the isolated --uitesting home screen.
+        XCTAssertTrue(app.buttons["quick-save"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["entry-count"].exists)
+        retainNativeCapture("home")
+
+        app.buttons["open-record"].tap()
+        XCTAssertTrue(app.buttons["cancel-record"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["save-record"].exists)
+        retainNativeCapture("record")
+        app.buttons["cancel-record"].tap()
+        XCTAssertTrue(app.buttons["quick-save"].waitForExistence(timeout: 10))
+
+        // Relaunch through XCTest, not manual simctl launch/terminate commands.
+        app.terminate()
+        app.launchArguments = ["--uitesting", "--screen", "widget-preview"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["桌面上的小陪伴"].waitForExistence(timeout: 20))
+        retainNativeCapture("widget-preview-app-hosted")
+    }
+
+    @MainActor
+    private func retainNativeCapture(_ screen: String) {
+        // XCUIScreen captures the genuine complete native device framebuffer.
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = "Pupudiary-native-\(screen)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        let hierarchy = XCTAttachment(string: app.debugDescription)
+        hierarchy.name = "Pupudiary-native-\(screen)-accessibility-hierarchy"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
+    }
+}
