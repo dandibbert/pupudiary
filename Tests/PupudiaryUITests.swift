@@ -109,6 +109,21 @@ extension PupudiaryUITests {
     }
 
     @MainActor
+    @objc func testCaptureRedesignedHomeAndRecord() throws {
+        XCTAssertTrue(app.buttons["quick-save"].waitForExistence(timeout: 20))
+        scrollToTop()
+        XCTAssertTrue(app.staticTexts["排便记录"].exists)
+        retainNativeCapture("redesigned-home")
+        app.buttons["open-record"].tap()
+        XCTAssertTrue(app.buttons["save-record"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["bristol-1"].exists)
+        XCTAssertTrue(app.buttons["bristol-7"].isHittable)
+        XCTAssertTrue(app.buttons["effort-easy"].isHittable)
+        XCTAssertTrue(app.buttons["effort-hard"].isHittable)
+        retainNativeCapture("redesigned-record")
+    }
+
+    @MainActor
     @objc func testNativeAppearanceAndSecondaryScreens() throws {
         launchScreen("home", flags: ["--dark-mode"])
         XCTAssertTrue(app.buttons["quick-save"].waitForExistence(timeout: 20))
@@ -122,11 +137,11 @@ extension PupudiaryUITests {
 
         // Navigate within the same native process for the two secondary screens.
         app.tabBars.buttons["记录"].tap()
-        XCTAssertTrue(app.navigationBars["日常手帐"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.navigationBars["排便历史"].waitForExistence(timeout: 10))
         scrollToTop()
         retainNativeCapture("history-large-type")
         app.tabBars.buttons["趋势"].tap()
-        XCTAssertTrue(app.navigationBars["我的节奏"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.navigationBars["排便趋势"].waitForExistence(timeout: 10))
         scrollToTop()
         retainNativeCapture("trends-large-type")
     }
@@ -140,7 +155,7 @@ extension PupudiaryUITests {
         XCTAssertEqual(supplement.label, "补充刚才记录")
         supplement.tap()
         XCTAssertTrue(app.buttons["save-record"].waitForExistence(timeout: 10))
-        let type = app.buttons["类型 4，柔软光滑"]
+        let type = app.buttons["bristol-4"]
         reveal(type)
         type.tap()
         app.buttons["save-record"].tap()
@@ -155,6 +170,9 @@ extension PupudiaryUITests {
         let initial = try count()
         app.buttons["open-record"].tap()
         XCTAssertTrue(app.buttons["save-record"].waitForExistence(timeout: 10))
+        let moreDetails = app.buttons["more-details-toggle"]
+        reveal(moreDetails)
+        moreDetails.tap()
         let duration = app.descendants(matching: .any).matching(identifier: "duration-field").firstMatch
         reveal(duration)
         duration.tap()

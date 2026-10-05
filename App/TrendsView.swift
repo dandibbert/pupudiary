@@ -16,7 +16,7 @@ struct TrendsView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    Text("看见自己的节奏").font(.subheadline).foregroundStyle(PupuStyle.muted)
+                    Text("频次与形态").font(.subheadline).foregroundStyle(PupuStyle.muted)
                     Picker("统计周期", selection: $days) { Text("近 7 天").tag(7); Text("近 30 天").tag(30) }.pickerStyle(.segmented)
                     HStack(spacing: 12) {
                         stat("记录次数", value: "\(records.count)", unit: "次", color: PupuStyle.sage)
@@ -74,7 +74,7 @@ struct TrendsView: View {
                         Text("这里只是你的记录摘要，不做健康评分，也不替代医疗建议。如有持续不适或出血，请及时咨询专业医护人员。").font(.caption).fixedSize(horizontal: false, vertical: true)
                     }.foregroundStyle(PupuStyle.muted).diaryCard(PupuStyle.lavender.opacity(0.65))
                 }.padding(22).padding(.bottom, 22)
-            }.paper().navigationTitle("我的节奏")
+            }.paper().navigationTitle("排便趋势")
         }
     }
     private var maximum: Int {

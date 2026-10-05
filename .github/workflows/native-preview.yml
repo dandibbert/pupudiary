@@ -1,8 +1,7 @@
-name: iOS build, screenshots and unsigned IPA
+name: Native redesign preview
 
 on:
-  push:
-    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 defaults:
@@ -13,55 +12,24 @@ permissions:
   contents: read
 
 concurrency:
-  group: ios-recovery-${{ github.ref }}
+  group: native-preview-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# One real iPhone Simulator job per PR revision. Full validation is intentionally
+# kept in ios.yml for main pushes or explicit manual dispatch.
 jobs:
-  native-ios:
-    name: Native iOS (${{ matrix.shard }})
+  native-preview:
+    name: Home and record native preview
     runs-on: macos-15-intel
     timeout-minutes: 35
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - shard: preview
-            device: iPhone 16 Pro
-            tests: |
-              PupudiaryUITests/PupudiaryUITests/test00CaptureNativeScreensForRecovery
-          - shard: quick
-            device: iPhone 16 Pro
-            tests: |
-              PupudiaryUITests/PupudiaryUITests/testQuickSaveAndUndo
-              PupudiaryUITests/PupudiaryUITests/testRapidRepeatedQuickSaveDoesNotDuplicate
-              PupudiaryUITests/PupudiaryUITests/testQuickSaveSurvivesBackgroundAndForeground
-              PupudiaryUITests/PupudiaryUITests/testSupplementAfterQuickSaveDoesNotDuplicate
-          - shard: records
-            device: iPhone 16 Pro
-            tests: |
-              PupudiaryUITests/PupudiaryUITests/testCancelThenReopenRecordDoesNotCreateEntry
-              PupudiaryUITests/PupudiaryUITests/testDetailedRecordSavesWithOptionalFieldsEmpty
-              PupudiaryUITests/PupudiaryUITests/testRecordKeyboardScrollAndNotePersistence
-          - shard: core
-            device: iPhone 16 Pro
-            tests: |
-              PupudiaryCoreTests
-          - shard: compact
-            device: iPhone SE (3rd generation)
-            tests: |
-              PupudiaryUITests/PupudiaryUITests/test00CaptureNativeScreensForRecovery
-          - shard: appearance
-            device: iPhone 16 Pro
-            tests: |
-              PupudiaryUITests/PupudiaryUITests/testNativeAppearanceAndSecondaryScreens
     defaults:
       run:
         shell: bash
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
-      PUPU_SIM_NAME: ${{ matrix.device }}
-      PUPU_SHARD: ${{ matrix.shard }}
-      PUPU_TESTS: ${{ matrix.tests }}
+      PUPU_SIM_NAME: iPhone 16 Pro
+      PUPU_SHARD: redesign-preview
+      PUPU_TESTS: PupudiaryUITests/PupudiaryUITests/testCaptureRedesignedHomeAndRecord
     steps:
       - uses: actions/checkout@v4
 
@@ -103,12 +71,12 @@ jobs:
         run: |
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
           xcodegen generate
-          grep -q 'test00CaptureNativeScreensForRecovery' Tests/PupudiaryUITests.swift
+          grep -q 'testCaptureRedesignedHomeAndRecord' Tests/PupudiaryUITests.swift
           xcodebuild -project Pupudiary.xcodeproj -scheme Pupudiary -showdestinations \
             > build/intel/logs/destinations.txt 2>&1
           cat build/intel/logs/destinations.txt
 
-      - name: Let XCTest boot, install and launch the native iPhone app
+      - name: Capture redesigned home and record in one native test
         id: tests
         timeout-minutes: 20
         run: |
@@ -182,7 +150,7 @@ jobs:
             > build/intel/test-summary.json 2> build/intel/logs/summary-export.log || true
           cat > build/intel/attachments/PROVENANCE.txt <<'TXT'
           Original native iPhone Simulator XCTest attachments. Actual device, OS and shard are in device.json.
-          Widget-preview images are app-hosted native views, not SpringBoard integration evidence.
+          This preview captures the redesigned home and record sheet from one native app launch.
           Images are unresized. Artifact existence is not a test pass; inspect the test summary and actual pixels.
           All exported attachments are retained even when human-readable attachment names differ.
           TXT
@@ -208,7 +176,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: intel-native-xctest-screenshots-${{ matrix.shard }}
+          name: native-redesign-preview
           path: |
             build/intel/attachments/
             build/intel/device.json
@@ -220,7 +188,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: intel-xctest-results-and-logs-${{ matrix.shard }}
+          name: native-redesign-preview-results
           path: |
             build/intel/Pupudiary-Intel.xcresult/
             build/intel/Pupudiary-Intel-first-attempt.xcresult/
@@ -238,65 +206,4 @@ jobs:
         run: |
           echo "Intel iPhone Simulator XCTest result: $TEST_STATUS" >> "$GITHUB_STEP_SUMMARY"
           echo "Native attachment export: $EXPORT_STATUS" >> "$GITHUB_STEP_SUMMARY"
-          echo 'Target: ${{ matrix.device }} / iOS 18.6 / shard ${{ matrix.shard }}; widget preview is app-hosted.' >> "$GITHUB_STEP_SUMMARY"
-
-  device-ipa:
-    name: Unsigned device IPA
-    runs-on: macos-15
-    timeout-minutes: 20
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
-    steps:
-      - uses: actions/checkout@v4
-      - name: Prepare device toolchain
-        run: |
-          mkdir -p build/logs build/ipa
-          test -d "$DEVELOPER_DIR"
-          xcodebuild -version | tee build/logs/xcode-version.txt
-          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
-          xcodegen generate
-      - name: Build and validate unsigned device IPA with widget
-        id: ipa
-        timeout-minutes: 15
-        run: scripts/build-unsigned-ipa.sh
-      - name: Upload unsigned IPA and signing instructions
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Pupudiary-unsigned-ipa
-          path: build/ipa/
-          if-no-files-found: warn
-          retention-days: 30
-      - name: Upload device build and validation logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: device-build-logs
-          path: build/logs/
-          if-no-files-found: warn
-          retention-days: 14
-      - name: Summarize device artifact
-        if: always()
-        env:
-          IPA_STATUS: ${{ steps.ipa.outcome }}
-        run: |
-          echo "Unsigned arm64 IPA build / validation: $IPA_STATUS" >> "$GITHUB_STEP_SUMMARY"
-          echo 'App and widget require authorized signing before installation.' >> "$GITHUB_STEP_SUMMARY"
-
-  core-storage:
-    name: SQLite and backup tests without Simulator
-    runs-on: macos-15
-    timeout-minutes: 10
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run production core source tests on macOS
-        run: scripts/test-core-on-macos.sh
-      - name: Preserve core test logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: host-core-test-logs
-          path: build/logs/host-core-tests.log
-          if-no-files-found: warn
+          echo 'Target: iPhone 16 Pro / iOS 18.6; redesigned home and record sheet only.' >> "$GITHUB_STEP_SUMMARY"

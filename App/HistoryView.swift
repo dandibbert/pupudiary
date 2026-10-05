@@ -27,7 +27,7 @@ struct HistoryView: View {
                         if typeSize.isAccessibilitySize {
                             Text("按日期查看").font(.headline).frame(maxWidth: .infinity, alignment: .leading)
                             DatePicker("日期", selection: Binding(get: { selectedDate ?? Date() }, set: { selectedDate = $0 }), displayedComponents: .date)
-                                .datePickerStyle(.compact)
+                                .datePickerStyle(.compact).labelsHidden().accessibilityLabel("筛选日期").frame(maxWidth: .infinity, alignment: .leading)
                             Button("显示全部记录") { selectedDate = nil }.frame(maxWidth: .infinity, alignment: .leading)
                         } else {
                         HStack {
@@ -56,7 +56,7 @@ struct HistoryView: View {
                     }.diaryCard()
                     HStack {
                         if let date = selectedDate { Button { selectedDate = nil } label: { Label(date.formatted(.dateTime.month().day()), systemImage: "xmark.circle.fill") }.font(.caption) }
-                        else { Text("所有日常").font(.headline) }
+                        else { Text("全部排便").font(.headline) }
                         Spacer()
                         Picker("形态筛选", selection: $type) { Text("全部形态").tag(0); ForEach(1...7, id: \.self) { Text("类型 \($0)").tag($0) } }.pickerStyle(.menu).font(.caption)
                     }
@@ -70,7 +70,7 @@ struct HistoryView: View {
                         }
                     }
                 }.padding(20).padding(.bottom, 20)
-            }.paper().navigationTitle("日常手帐")
+            }.paper().navigationTitle("排便历史")
             .searchable(text: $query, prompt: "搜索备注与感受")
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { model.showRecord = true } label: { Image(systemName: "plus") }.accessibilityLabel("新建记录") } }
         }
