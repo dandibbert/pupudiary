@@ -49,7 +49,14 @@ def main():
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
-    selection = select_devices(json.loads(args.input.read_text()))
+    inventory = json.loads(args.input.read_text())
+    preferred = os.environ.get("PUPU_SIMULATOR_OS")
+    if preferred:
+        identifier = "com.apple.CoreSimulator.SimRuntime.iOS-" + preferred.replace(".", "-")
+        if identifier not in inventory.get("devices", {}):
+            raise ValueError("Requested simulator runtime is not installed: " + preferred)
+        inventory = {"devices": {identifier: inventory["devices"][identifier]}}
+    selection = select_devices(inventory)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(selection, indent=2) + "\n")
     print(json.dumps(selection, indent=2))

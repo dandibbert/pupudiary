@@ -70,9 +70,17 @@ PY
 while IFS=$'\t' read -r role udid name os; do
   [[ "$FILTER" == "all" || "$FILTER" == "$role" ]] || continue
   echo "Capturing $name / iOS $os ($udid)"
+  # Start the official Simulator application through LaunchServices as well as the device service.
+  python3 - <<'PYOPEN'
+import os, subprocess
+try:
+    subprocess.run(['open', '-a', os.environ['DEVELOPER_DIR'] + '/Applications/Simulator.app'], timeout=20, check=False)
+except subprocess.TimeoutExpired:
+    print('Simulator UI launch timed out; continuing with the bounded device service check', flush=True)
+PYOPEN
   # bootstatus -b starts an unbooted simulator and also waits for readiness.
   run_simctl 180 bootstatus "$udid" -b
-  run_simctl 30 status_bar "$udid" override --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 --batteryState charged --batteryLevel 100
+  run_simctl 15 status_bar "$udid" override --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 --batteryState charged --batteryLevel 100 || echo "Cosmetic status-bar override failed; keeping the actual system status bar"
   run_simctl 30 ui "$udid" appearance light
   run_simctl 60 install "$udid" "$APP"
   for screen in home record widget-preview history trends; do

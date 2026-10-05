@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ios-${{ github.ref }}
+  group: ios-recovery-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -23,10 +23,12 @@ jobs:
     timeout-minutes: 45
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      PUPU_SIMULATOR_OS: "18.6"
     steps:
       - uses: actions/checkout@v4
 
       - name: Record toolchain and available simulators
+        timeout-minutes: 3
         run: |
           mkdir -p build/logs build/screenshots build/ipa
           test -d "$DEVELOPER_DIR"
@@ -47,7 +49,7 @@ jobs:
           xcodegen generate
           xcodebuild -list -project Pupudiary.xcodeproj | tee build/logs/project.txt
 
-      - name: Select actual installed Pro and compact iPhones
+      - name: Select actual Pro and compact iPhones on the configured runtime
         id: devices
         run: python3 scripts/select-simulators.py build/logs/simulators.json build/simulator-selection.json
 
@@ -74,6 +76,7 @@ jobs:
           path: |
             build/screenshots/
             build/simulator-selection.json
+            build/logs/screenshots.log
           if-no-files-found: warn
           retention-days: 30
 
@@ -184,3 +187,21 @@ jobs:
         run: |
           echo "Unsigned arm64 IPA build / validation: $IPA_STATUS" >> "$GITHUB_STEP_SUMMARY"
           echo 'App and widget require authorized signing before installation.' >> "$GITHUB_STEP_SUMMARY"
+
+  core-storage:
+    name: SQLite and backup tests without Simulator
+    runs-on: macos-15
+    timeout-minutes: 10
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run production core source tests on macOS
+        run: scripts/test-core-on-macos.sh
+      - name: Preserve core test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-core-test-logs
+          path: build/logs/host-core-tests.log
+          if-no-files-found: warn
