@@ -7,6 +7,7 @@ import SwiftUI
         WindowGroup {
             RootView().environmentObject(model)
                 .tint(PupuStyle.green)
+                .preferredColorScheme(model.isUITesting ? (ProcessInfo.processInfo.arguments.contains("--dark-mode") ? .dark : .light) : nil)
                 .environment(\.locale, Locale(identifier: "zh_Hans_CN"))
                 .modifier(TestTypography(enabled: model.isUITesting && ProcessInfo.processInfo.arguments.contains("--large-type")))
                 .onChange(of: scenePhase) { _, phase in if phase == .active { model.reload() } }

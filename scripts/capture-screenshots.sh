@@ -80,8 +80,6 @@ except subprocess.TimeoutExpired:
 PYOPEN
   # bootstatus -b starts an unbooted simulator and also waits for readiness.
   run_simctl 180 bootstatus "$udid" -b
-  run_simctl 15 status_bar "$udid" override --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 --batteryState charged --batteryLevel 100 || echo "Cosmetic status-bar override failed; keeping the actual system status bar"
-  run_simctl 30 ui "$udid" appearance light
   run_simctl 60 install "$udid" "$APP"
   for screen in home record widget-preview history trends; do
     terminate_app
@@ -91,12 +89,10 @@ PYOPEN
     run_simctl 30 io "$udid" screenshot "$OUTPUT/${role}-${screen}.png"
   done
   if [[ "$role" == "primary" ]]; then
-    run_simctl 30 ui "$udid" appearance dark
     terminate_app
-    run_simctl 60 launch "$udid" com.dandibbert.pupudiary --uitesting --screen home
+    run_simctl 60 launch "$udid" com.dandibbert.pupudiary --uitesting --screen home --dark-mode
     sleep 3
     run_simctl 30 io "$udid" screenshot "$OUTPUT/${role}-home-dark.png"
-    run_simctl 30 ui "$udid" appearance light
     for screen in home record; do
       terminate_app
       run_simctl 60 launch "$udid" com.dandibbert.pupudiary --uitesting --screen "$screen" --large-type
