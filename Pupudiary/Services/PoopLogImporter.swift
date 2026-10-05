@@ -46,7 +46,8 @@ enum PoopLogImporter {
             guard entry.key.count == 8 else { return nil }
             let prefix = entry.key.prefix(4).reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
             guard prefix != 0, (prefix & 0x00FF_FFFF) >> 2 == entityID else { return nil }
-            return BowelLog(entry.value)?.record
+            guard let log = BowelLog(entry.value), log.type != 8 else { return nil }   // 8 = 当天没有排便
+            return log.record
         }
         guard !records.isEmpty else { throw ImportError.noRecords }
         return records
@@ -63,10 +64,10 @@ private struct BowelLog {
     let note: String
     let hadBlood, hadPain, hasFoodPieces, hadMucus, hadBloating, hadColic,
         hadFlatulence, hadAbnormalSmell, usedConstipationMedication, usedLaxative: Bool
-    let type: Int64          // 0...6 → 布里斯托 1...7
-    let feeling: Int64       // 0...2
-    let weight: Int64        // 0...2
-    let duration: Int64      // 0...2
+    let type: Int64          // 0...6 → 布里斯托 1...7；7 = Other；8 = No bowel movement
+    let feeling: Int64       // 0 Easy / 1 Difficult / 2 Incomplete
+    let weight: Int64        // 0 Little / 1 Normal / 2 Alot
+    let duration: Int64      // 0 <5 mins / 1 5-10 mins / 2 >10 mins
     let duringMenstruation: Bool
 
     init?(_ data: Data) {
@@ -99,8 +100,10 @@ private struct BowelLog {
         if hadBloating || hadFlatulence { symptoms.append(.bloating) }
         if hadBlood { symptoms.append(.blood) }
         if hadMucus { symptoms.append(.mucus) }
+        if feeling == 2 { symptoms.append(.incomplete) }
 
         var tags: [String] = []
+        if type == 7 { tags.append("PoopLog：其他形态") }
         if usedLaxative { tags.append("用了泻药") }
         if usedConstipationMedication { tags.append("用了便秘药") }
         if hadAbnormalSmell { tags.append("气味异常") }
@@ -115,8 +118,9 @@ private struct BowelLog {
             bristol: BristolType(rawValue: Int(type) + 1) ?? .t4,
             color: Self.nearestColor(color),
             amount: Amount(rawValue: Int(weight)) ?? .medium,
-            ease: Ease(rawValue: Int(feeling)) ?? .normal,
-            durationMinutes: [0, 10, 20][Int(max(0, min(2, duration)))],
+            ease: feeling == 1 ? .hard : (feeling == 2 ? .normal : .easy),
+            // PoopLog 只记了档位：<5 / 5-10 / >10 分钟，取一个代表值
+            durationMinutes: [3, 8, 15][Int(max(0, min(2, duration)))],
             symptoms: symptoms,
             note: tags.joined(separator: "；"),
             isQuick: false
