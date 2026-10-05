@@ -52,12 +52,6 @@ if code and not (sys.argv[3] == 'terminate' and code != 124):
 sys.exit(code)
 PY
 }
-terminate_app() {
-  local code=0
-  run_simctl 30 terminate "$udid" com.dandibbert.pupudiary || code=$?
-  # Nonzero for an already stopped app is expected. Do not hide a stalled command.
-  [[ "$code" != 124 ]] || exit "$code"
-}
 python3 - "$SELECTION" <<'PY' > "$OUTPUT/devices.tsv"
 import json, sys
 seen = set()
@@ -68,7 +62,7 @@ for role, device in json.load(open(sys.argv[1])).items():
     print('\t'.join([role, device['udid'], device['name'], device['os']]))
 PY
 while IFS=$'\t' read -r role udid name os; do
-  [[ "$FILTER" == "all" || "$FILTER" == "$role" ]] || continue
+  [[ "$FILTER" == "all" || "$FILTER" == "$role" || ( "$FILTER" == "variants" && "$role" == "primary" ) ]] || continue
   echo "Capturing $name / iOS $os ($udid)"
   # Start the official Simulator application through LaunchServices as well as the device service.
   python3 - <<'PYOPEN'
@@ -81,27 +75,25 @@ PYOPEN
   # bootstatus -b starts an unbooted simulator and also waits for readiness.
   run_simctl 180 bootstatus "$udid" -b
   run_simctl 60 install "$udid" "$APP"
-  for screen in home record widget-preview history trends; do
-    terminate_app
-    run_simctl 60 launch "$udid" com.dandibbert.pupudiary --uitesting --screen "$screen"
+  screens="home record widget-preview"
+  [[ "$FILTER" != "variants" ]] || screens="history trends"
+  for screen in $screens; do
+    run_simctl 120 launch --terminate-running-process "$udid" com.dandibbert.pupudiary --uitesting --screen "$screen"
     # Allow initial SwiftUI layout, sheet presentation and rendering to settle.
     sleep 3
     run_simctl 30 io "$udid" screenshot "$OUTPUT/${role}-${screen}.png"
   done
-  if [[ "$role" == "primary" ]]; then
-    terminate_app
-    run_simctl 60 launch "$udid" com.dandibbert.pupudiary --uitesting --screen home --dark-mode
+  if [[ "$role" == "primary" && ( "$FILTER" == "variants" || "$FILTER" == "all" ) ]]; then
+    run_simctl 120 launch --terminate-running-process "$udid" com.dandibbert.pupudiary --uitesting --screen home --dark-mode
     sleep 3
     run_simctl 30 io "$udid" screenshot "$OUTPUT/${role}-home-dark.png"
     for screen in home record; do
-      terminate_app
-      run_simctl 60 launch "$udid" com.dandibbert.pupudiary --uitesting --screen "$screen" --large-type
+      run_simctl 120 launch --terminate-running-process "$udid" com.dandibbert.pupudiary --uitesting --screen "$screen" --large-type
       sleep 3
       run_simctl 30 io "$udid" screenshot "$OUTPUT/${role}-${screen}-large-type.png"
     done
   fi
-  terminate_app
-  run_simctl 30 shutdown "$udid"
+  run_simctl 30 shutdown "$udid" || echo "Simulator cleanup did not finish; captures are retained and the CI runner will be discarded"
 done < "$OUTPUT/devices.tsv"
 python3 - "$SELECTION" "$OUTPUT" <<'PY'
 import json, struct, sys

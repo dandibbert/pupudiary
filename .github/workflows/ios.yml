@@ -86,6 +86,11 @@ jobs:
         if: ${{ !cancelled() && steps.simulator_build.outcome == 'success' }}
         run: scripts/capture-screenshots.sh build/simulator-selection.json build/DerivedData/Build/Products/Debug-iphonesimulator/Pupudiary.app build/screenshots compact 2>&1 | tee build/logs/compact-screenshots.log
 
+      - name: Capture dark, large text and secondary screens
+        timeout-minutes: 6
+        if: ${{ !cancelled() && steps.screenshots.outcome == 'success' }}
+        run: scripts/capture-screenshots.sh build/simulator-selection.json build/DerivedData/Build/Products/Debug-iphonesimulator/Pupudiary.app build/screenshots variants 2>&1 | tee build/logs/variant-screenshots.log
+
       - name: Upload all native screenshot variants
         if: always()
         uses: actions/upload-artifact@v4
