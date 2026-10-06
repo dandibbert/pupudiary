@@ -87,6 +87,7 @@ struct ExportView: View {
         .background(Theme.background.ignoresSafeArea())
         .navigationTitle("导出记录")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         .sheet(item: $shareItem) { item in
             ActivityView(items: [item.url])
                 .presentationDetents([.medium, .large])

@@ -12,6 +12,18 @@ struct StatsView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("看看最近的变化")
+                                .font(.cute(14, .medium))
+                                .foregroundStyle(Theme.subtle)
+                            Text("趋势")
+                                .font(.cute(26, .heavy))
+                                .foregroundStyle(Theme.ink)
+                        }
+                        Spacer()
+                    }
+                    .padding(.top, 8)
                     Picker("范围", selection: $range) {
                         ForEach(ranges, id: \.self) { Text("\($0) 天").tag($0) }
                     }
@@ -32,11 +44,11 @@ struct StatsView: View {
                         .font(.cute(11, .medium))
                         .foregroundStyle(Theme.subtle)
                 }
-                .padding(16)
-                .padding(.bottom, 20)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 90)
             }
             .background(Theme.background.ignoresSafeArea())
-            .navigationTitle("趋势")
+            .toolbar(.hidden, for: .navigationBar)
         }
     }
 

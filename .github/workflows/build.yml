@@ -21,6 +21,13 @@ jobs:
       - name: Xcode version
         run: xcodebuild -version
 
+      - name: Test PoopLog import
+        run: |
+          python3 -m venv /tmp/venv && /tmp/venv/bin/pip install -q lmdb
+          /tmp/venv/bin/python scripts/make_pooplog_fixture.py /tmp/pooplog.zip
+          swiftc -O -o /tmp/importcheck Shared/Models.swift Pupudiary/Services/PoopLogImporter.swift Tests/ImportCheck/main.swift
+          /tmp/importcheck /tmp/pooplog.zip
+
       - name: Generate Xcode project
         run: |
           brew install xcodegen

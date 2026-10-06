@@ -1,5 +1,4 @@
 import SwiftUI
-import UniformTypeIdentifiers
 import WidgetKit
 
 struct SettingsView: View {
@@ -9,171 +8,252 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.lockEnabled) private var lockEnabled = false
     @AppStorage(SettingsKey.hapticsEnabled) private var hapticsEnabled = true
     @AppStorage(SharedSettings.quickTypeKey, store: AppGroup.defaults) private var quickTypeRaw = BristolType.t4.rawValue
-    @State private var importing = false
     @State private var confirmClear = false
     @State private var showGuide = false
     @State private var showWidgetGuide = false
-    @State private var alert: AlertInfo?
-
-    struct AlertInfo: Identifiable {
-        let id = UUID()
-        let title: String
-        let message: String
-    }
+    @State private var notificationDenied = false
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    profileHeader
+            ScrollView {
+                VStack(spacing: 16) {
+                    header
+                    profileCard
+                    quickTypeCard
+                    widgetCard
+                    preferencesCard
+                    dataCard
+                    aboutCard
+                    Text("本 App 仅用于日常记录，不能代替专业医疗建议")
+                        .font(.cute(11, .medium))
+                        .foregroundStyle(Theme.subtle)
                 }
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets())
-
-                Section {
-                    Picker(selection: $quickTypeRaw) {
-                        ForEach(BristolType.allCases) { t in
-                            Text("\(t.label) · \(t.nickname)（\(t.status.title)）").tag(t.rawValue)
-                        }
-                    } label: {
-                        Label("默认类型", systemImage: "sparkles")
-                    }
-                    .onChange(of: quickTypeRaw) { _, _ in
-                        WidgetCenter.shared.reloadAllTimelines()
-                    }
-                    Button {
-                        showWidgetGuide = true
-                    } label: {
-                        Label("小组件 / 控制中心 / Siri 使用方法", systemImage: "square.grid.2x2.fill")
-                    }
-                } header: {
-                    Text("一键记录")
-                } footer: {
-                    Text("首页大按钮、桌面小组件、控制中心和 Siri 一键记录时使用这个类型，之后可以随时补充细节。")
-                }
-
-                Section("提醒") {
-                    Toggle(isOn: $reminderEnabled) {
-                        Label("每日提醒", systemImage: "bell.fill")
-                    }
-                    .onChange(of: reminderEnabled) { _, on in
-                        Task { await updateReminder(on) }
-                    }
-                    if reminderEnabled {
-                        DatePicker(selection: reminderDate, displayedComponents: .hourAndMinute) {
-                            Label("提醒时间", systemImage: "clock")
-                        }
-                        .onChange(of: reminderMinutes) { _, m in
-                            ReminderService.schedule(minutes: m)
-                        }
-                    }
-                }
-
-                Section("隐私与体验") {
-                    Toggle(isOn: $lockEnabled) {
-                        Label("\(AppLock.biometryName)锁", systemImage: "lock.fill")
-                    }
-                    .disabled(!AppLock.canUseBiometrics && !lockEnabled)
-                    .onChange(of: lockEnabled) { _, on in
-                        if on {
-                            Task {
-                                if !(await AppLock.authenticate()) { lockEnabled = false }
-                            }
-                        }
-                    }
-                    Toggle(isOn: $hapticsEnabled) {
-                        Label("触感反馈", systemImage: "hand.tap.fill")
-                    }
-                }
-
-                Section {
-                    NavigationLink {
-                        ExportView()
-                    } label: {
-                        Label("导出记录", systemImage: "square.and.arrow.up.fill")
-                    }
-                    Button {
-                        importing = true
-                    } label: {
-                        Label("导入（噗噗手帐 / PoopLog 备份）", systemImage: "square.and.arrow.down.fill")
-                    }
-                    Button(role: .destructive) {
-                        confirmClear = true
-                    } label: {
-                        Label("清空所有记录", systemImage: "trash.fill")
-                            .foregroundStyle(Theme.warning)
-                    }
-                    .disabled(store.records.isEmpty)
-                } header: {
-                    Text("数据")
-                } footer: {
-                    Text("所有数据只保存在这台手机上，不会上传。重新安装或更换签名前，记得先导出 JSON 备份。")
-                }
-
-                Section {
-                    LabeledContent {
-                        Text(AppGroup.isShared ? "已互通" : "未互通")
-                            .foregroundStyle(AppGroup.isShared ? GutStatus.ideal.color : Theme.warning)
-                    } label: {
-                        Label("小组件数据", systemImage: AppGroup.isShared ? "link.circle.fill" : "link.badge.plus")
-                    }
-                } header: {
-                    Text("小组件")
-                } footer: {
-                    Text(AppGroup.isShared
-                         ? "App Group：\(AppGroup.identifier)"
-                         : "签名里没有找到可用的 App Group（描述文件中：\(AppGroup.profileGroups.isEmpty ? "无" : AppGroup.profileGroups.joined(separator: ", "))）。")
-                }
-
-                Section("关于") {
-                    Button {
-                        showGuide = true
-                    } label: {
-                        Label("七种类型怎么分", systemImage: "book.fill")
-                    }
-                    LabeledContent {
-                        Text(appVersion)
-                    } label: {
-                        Label("版本", systemImage: "info.circle.fill")
-                    }
-                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 90)
             }
-            .scrollContentBackground(.hidden)
             .background(Theme.background.ignoresSafeArea())
-            .navigationTitle("我的")
-            .tint(Theme.primary)
-            .fileImporter(isPresented: $importing, allowedContentTypes: [.json, .zip, .data]) { result in
-                handleImport(result)
-            }
+            .toolbar(.hidden, for: .navigationBar)
             .confirmationDialog("确定清空全部 \(store.records.count) 条记录吗？此操作无法撤销。",
                                 isPresented: $confirmClear, titleVisibility: .visible) {
                 Button("清空", role: .destructive) { store.deleteAll() }
             }
-            .alert(item: $alert) { info in
-                Alert(title: Text(info.title), message: Text(info.message), dismissButton: .default(Text("好的")))
+            .alert("没有通知权限", isPresented: $notificationDenied) {
+                Button("好的", role: .cancel) {}
+            } message: {
+                Text("请到 系统设置 › 通知 › 噗噗手帐 中允许通知。")
             }
             .sheet(isPresented: $showGuide) { BristolGuideView() }
             .sheet(isPresented: $showWidgetGuide) { WidgetGuideView() }
         }
     }
 
-    private var profileHeader: some View {
+    // MARK: 顶部
+
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("设置与数据")
+                    .font(.cute(14, .medium))
+                    .foregroundStyle(Theme.subtle)
+                Text("我的")
+                    .font(.cute(26, .heavy))
+                    .foregroundStyle(Theme.ink)
+            }
+            Spacer()
+        }
+        .padding(.top, 8)
+    }
+
+    private var profileCard: some View {
         let stats = store.stats
         let first = store.records.last?.timestamp
         return HStack(spacing: 14) {
-            Mascot(mood: .happy).frame(width: 70, height: 70)
-            VStack(alignment: .leading, spacing: 4) {
+            Mascot(mood: .happy).frame(width: 72, height: 72)
+            VStack(alignment: .leading, spacing: 6) {
                 Text("噗噗手帐").font(.cute(20, .heavy)).foregroundStyle(Theme.ink)
                 if let first {
-                    Text("从 \(first.formatted(.dateTime.year().month().day())) 开始，共记录 \(store.records.count) 次")
+                    Text("从 \(first.formatted(.dateTime.year().month().day())) 开始")
                         .font(.cute(13, .medium)).foregroundStyle(Theme.subtle)
-                    Text("已连续记录 \(stats.streak) 天 🔥")
-                        .font(.cute(13, .bold)).foregroundStyle(Theme.primary)
+                    HStack(spacing: 8) {
+                        pill("共 \(store.records.count) 次", color: Theme.primary)
+                        pill("连续 \(stats.streak) 天 🔥", color: GutStatus.dry.color)
+                    }
                 } else {
                     Text("还没有记录，从今天开始吧～").font(.cute(13, .medium)).foregroundStyle(Theme.subtle)
                 }
             }
             Spacer(minLength: 0)
+        }
+        .cardStyle()
+    }
+
+    private func pill(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.cute(12, .bold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(color.opacity(0.14), in: Capsule())
+    }
+
+    // MARK: 一键记录默认类型
+
+    private var quickTypeCard: some View {
+        let selected = BristolType(rawValue: quickTypeRaw) ?? .t4
+        return VStack(alignment: .leading, spacing: 12) {
+            SectionTitle(title: "一键记录记成什么", symbol: "sparkles")
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7), spacing: 6) {
+                ForEach(BristolType.allCases) { t in
+                    let on = t == selected
+                    Button {
+                        quickTypeRaw = t.rawValue
+                        WidgetCenter.shared.reloadAllTimelines()
+                        Haptics.tap()
+                    } label: {
+                        VStack(spacing: 2) {
+                            BristolIcon(type: t, showFace: false)
+                                .frame(width: 28, height: 28)
+                            Text("\(t.rawValue)")
+                                .font(.cute(11, .bold))
+                                .foregroundStyle(on ? Theme.ink : Theme.subtle)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .background(on ? t.status.softColor : Theme.cardAlt.opacity(0.5),
+                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(on ? t.status.color : .clear, lineWidth: 2))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(t.label) \(t.nickname)")
+                    .accessibilityAddTraits(on ? .isSelected : [])
+                }
+            }
+            HStack(spacing: 6) {
+                StatusChip(status: selected.status)
+                Text("\(selected.label) · \(selected.nickname)")
+                    .font(.cute(13, .bold))
+                    .foregroundStyle(Theme.ink)
+            }
+            Text("首页大按钮、小组件、控制中心和 Siri 一键记录时用这个类型，之后可以随时补充细节。")
+                .font(.cute(12, .medium))
+                .foregroundStyle(Theme.subtle)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .cardStyle()
+    }
+
+    // MARK: 小组件
+
+    private var widgetCard: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            SectionTitle(title: "小组件", symbol: "square.grid.2x2.fill")
+                .padding(.bottom, 6)
+            SettingRow(icon: AppGroup.isShared ? "link" : "link.badge.plus",
+                       color: AppGroup.isShared ? GutStatus.ideal.color : Theme.warning,
+                       title: "和 App 数据互通",
+                       subtitle: AppGroup.isShared ? AppGroup.identifier : "签名里没有可用的 App Group") {
+                Text(AppGroup.isShared ? "已互通" : "未互通")
+                    .font(.cute(12, .bold))
+                    .foregroundStyle(AppGroup.isShared ? GutStatus.ideal.color : Theme.warning)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background((AppGroup.isShared ? GutStatus.ideal.color : Theme.warning).opacity(0.14), in: Capsule())
+            }
+            Divider().padding(.leading, 44)
+            Button { showWidgetGuide = true } label: {
+                SettingRow(icon: "questionmark", color: GutStatus.loose.color,
+                           title: "添加小组件 / 控制中心 / Siri") { Chevron() }
+            }
+            .buttonStyle(.plain)
+        }
+        .cardStyle()
+    }
+
+    // MARK: 提醒与隐私
+
+    private var preferencesCard: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            SectionTitle(title: "提醒与隐私", symbol: "bell.fill")
+                .padding(.bottom, 6)
+            SettingRow(icon: "bell.fill", color: GutStatus.soft.color, title: "每日提醒",
+                       subtitle: reminderEnabled ? "每天提醒你记录一次" : nil) {
+                Toggle("", isOn: $reminderEnabled).labelsHidden().tint(Theme.primary)
+            }
+            .onChange(of: reminderEnabled) { _, on in
+                Task { await updateReminder(on) }
+            }
+            if reminderEnabled {
+                SettingRow(icon: "clock.fill", color: GutStatus.soft.color.opacity(0.7), title: "提醒时间") {
+                    DatePicker("", selection: reminderDate, displayedComponents: .hourAndMinute)
+                        .labelsHidden()
+                        .tint(Theme.primary)
+                }
+                .onChange(of: reminderMinutes) { _, m in ReminderService.schedule(minutes: m) }
+            }
+            Divider().padding(.leading, 44)
+            SettingRow(icon: "lock.fill", color: Theme.primary, title: "\(AppLock.biometryName)锁",
+                       subtitle: "打开 App 时需要验证") {
+                Toggle("", isOn: $lockEnabled).labelsHidden().tint(Theme.primary)
+                    .disabled(!AppLock.canUseBiometrics && !lockEnabled)
+            }
+            .onChange(of: lockEnabled) { _, on in
+                if on {
+                    Task { if !(await AppLock.authenticate()) { lockEnabled = false } }
+                }
+            }
+            Divider().padding(.leading, 44)
+            SettingRow(icon: "hand.tap.fill", color: GutStatus.ideal.color, title: "触感反馈") {
+                Toggle("", isOn: $hapticsEnabled).labelsHidden().tint(Theme.primary)
+            }
+        }
+        .cardStyle()
+    }
+
+    // MARK: 数据
+
+    private var dataCard: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            SectionTitle(title: "数据", symbol: "externaldrive.fill")
+                .padding(.bottom, 6)
+            NavigationLink { ExportView() } label: {
+                SettingRow(icon: "square.and.arrow.up.fill", color: Theme.primary,
+                           title: "导出记录", subtitle: "PDF 报告 / CSV 表格 / JSON 备份") { Chevron() }
+            }
+            .buttonStyle(.plain)
+            Divider().padding(.leading, 44)
+            NavigationLink { ImportView() } label: {
+                SettingRow(icon: "square.and.arrow.down.fill", color: GutStatus.loose.color,
+                           title: "导入数据", subtitle: "PoopLog 备份 / 噗噗手帐备份") { Chevron() }
+            }
+            .buttonStyle(.plain)
+            Divider().padding(.leading, 44)
+            Button { confirmClear = true } label: {
+                SettingRow(icon: "trash.fill", color: Theme.warning, title: "清空所有记录") { EmptyView() }
+            }
+            .buttonStyle(.plain)
+            .disabled(store.records.isEmpty)
+            .opacity(store.records.isEmpty ? 0.5 : 1)
+            Text("数据只保存在这台手机上。重新签名安装前，记得先导出 JSON 备份。")
+                .font(.cute(12, .medium))
+                .foregroundStyle(Theme.subtle)
+                .padding(.top, 6)
+        }
+        .cardStyle()
+    }
+
+    // MARK: 关于
+
+    private var aboutCard: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button { showGuide = true } label: {
+                SettingRow(icon: "book.fill", color: GutStatus.dry.color, title: "七种类型怎么分") { Chevron() }
+            }
+            .buttonStyle(.plain)
+            Divider().padding(.leading, 44)
+            SettingRow(icon: "info", color: Theme.subtle, title: "版本") {
+                Text(appVersion).font(.cute(14, .medium)).foregroundStyle(Theme.subtle)
+            }
         }
         .cardStyle()
     }
@@ -199,33 +279,52 @@ struct SettingsView: View {
                 ReminderService.schedule(minutes: reminderMinutes)
             } else {
                 reminderEnabled = false
-                alert = AlertInfo(title: "没有通知权限", message: "请到 系统设置 › 通知 › 噗噗手帐 中允许通知。")
+                notificationDenied = true
             }
         } else {
             ReminderService.cancel()
         }
     }
+}
 
-    private func handleImport(_ result: Result<URL, Error>) {
-        switch result {
-        case .success(let url):
-            let access = url.startAccessingSecurityScopedResource()
-            defer { if access { url.stopAccessingSecurityScopedResource() } }
-            do {
-                let data = try Data(contentsOf: url)
-                let fromPoopLog = PoopLogImporter.isPoopLogBackup(data)
-                let records = try fromPoopLog ? PoopLogImporter.records(from: data) : Exporter.importJSON(data)
-                let added = store.merge(records)
-                alert = AlertInfo(title: "导入成功",
-                                  message: "从\(fromPoopLog ? " PoopLog " : "备份")读取到 \(records.count) 条记录，新增 \(added) 条。重复导入不会产生重复记录。")
-            } catch let error as PoopLogImporter.ImportError {
-                alert = AlertInfo(title: "导入失败", message: error.errorDescription ?? "无法读取 PoopLog 备份。")
-            } catch {
-                alert = AlertInfo(title: "导入失败", message: "文件格式不对。支持噗噗手帐导出的 JSON 备份，以及 PoopLog 导出的 zip 备份。")
+/// 设置里的一行：彩色小图标 + 标题 + 右侧内容
+struct SettingRow<Trailing: View>: View {
+    let icon: String
+    let color: Color
+    let title: String
+    var subtitle: String? = nil
+    @ViewBuilder var trailing: () -> Trailing
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 32, height: 32)
+                .background(color, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.cute(16, .semibold)).foregroundStyle(Theme.ink)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.cute(12, .medium))
+                        .foregroundStyle(Theme.subtle)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
-        case .failure:
-            alert = AlertInfo(title: "导入失败", message: "无法读取这个文件。")
+            Spacer(minLength: 8)
+            trailing()
         }
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+    }
+}
+
+struct Chevron: View {
+    var body: some View {
+        Image(systemName: "chevron.right")
+            .font(.system(size: 13, weight: .bold))
+            .foregroundStyle(Theme.subtle.opacity(0.6))
     }
 }
 
