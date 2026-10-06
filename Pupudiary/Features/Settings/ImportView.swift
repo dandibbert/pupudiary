@@ -5,8 +5,9 @@ import UniformTypeIdentifiers
 /// 文件类型不做限制（有些备份在「文件」里识别不出类型，会变成灰色选不了），选中后按内容自动判断。
 struct ImportView: View {
     @Environment(RecordStore.self) private var store
-    @State private var picking = false
     @State private var state = Phase.idle
+    /// 从「文件」等 App 共享过来的文件，打开页面后自动导入
+    var incomingURL: URL? = nil
 
     enum Phase {
         case idle
@@ -26,14 +27,16 @@ struct ImportView: View {
                     source(icon: "doc.text.fill", color: Theme.primary,
                            title: "噗噗手帐 JSON 备份",
                            text: "在「我的 › 导出记录」里导出的 JSON 文件。")
-                    Text("重复导入同一份备份不会产生重复记录，只会更新已有的那条。")
+                    Text("也可以在「文件」App 里长按备份 › 共享 › 选择「噗噗手帐」直接导入。重复导入同一份备份不会产生重复记录。")
                         .font(.cute(12, .medium))
                         .foregroundStyle(Theme.subtle)
                 }
                 .cardStyle()
 
                 Button {
-                    picking = true
+                    DocumentPicker.shared.present { url in
+                        if let url { importFile(url) }
+                    }
                 } label: {
                     HStack {
                         if case .working = state {
@@ -60,13 +63,8 @@ struct ImportView: View {
         .navigationTitle("导入数据")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .fileImporter(isPresented: $picking, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
-            switch result {
-            case .success(let urls):
-                if let url = urls.first { importFile(url) }
-            case .failure(let error):
-                state = .failed("无法打开文件：\(error.localizedDescription)")
-            }
+        .task {
+            if let incomingURL, case .idle = state { importFile(incomingURL) }
         }
     }
 

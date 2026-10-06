@@ -42,6 +42,16 @@ struct RootView: View {
                 router.showNewRecord = true
             }
         }
+        .sheet(item: $router.incomingFile) { file in
+            NavigationStack {
+                ImportView(incomingURL: file.url)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("完成") { router.incomingFile = nil }
+                        }
+                    }
+            }
+        }
         .sheet(isPresented: $router.showNewRecord) {
             RecordEditorView(record: nil)
         }

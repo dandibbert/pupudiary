@@ -25,8 +25,19 @@ final class Router {
     var tab: Tab = .home
     /// 弹出新建记录
     var showNewRecord = false
+    /// 从其他 App 共享 / 打开过来的备份文件
+    var incomingFile: IncomingFile?
+
+    struct IncomingFile: Identifiable {
+        let id = UUID()
+        let url: URL
+    }
 
     func handle(_ url: URL) {
+        if url.isFileURL {
+            incomingFile = IncomingFile(url: url)
+            return
+        }
         guard url.scheme == "pupudiary" else { return }
         switch url.host {
         case "record":
