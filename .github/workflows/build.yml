@@ -6,6 +6,11 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      bundle_id:
+        description: "自定义 Bundle ID（留空用默认 com.pupudiary.app；扩展会是 <ID>.widget）"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -49,6 +54,7 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath build/Pupudiary.xcarchive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            ${{ inputs.bundle_id != '' && format('APP_BUNDLE_ID={0}', inputs.bundle_id) || '' }} \
             | tee build.log | grep -E "error:|warning: .*Pupudiary|ARCHIVE (SUCCEEDED|FAILED)" || true
           grep -q "ARCHIVE SUCCEEDED" build.log
 
@@ -61,6 +67,8 @@ jobs:
           mkdir -p build/Payload
           cp -R build/Pupudiary.xcarchive/Products/Applications/Pupudiary.app build/Payload/
           test -d build/Payload/Pupudiary.app/PlugIns/PupudiaryWidget.appex || { echo "widget extension missing"; exit 1; }
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' build/Payload/Pupudiary.app/Info.plist
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' build/Payload/Pupudiary.app/PlugIns/PupudiaryWidget.appex/Info.plist
           (cd build && zip -qry Pupudiary-unsigned.ipa Payload)
           ls -lh build/Pupudiary-unsigned.ipa
 
