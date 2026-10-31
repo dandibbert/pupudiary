@@ -11,7 +11,16 @@ struct PupudiaryApp: App {
             RootView()
                 .environment(store)
                 .environment(router)
-                .onOpenURL { router.handle($0) }
+                .onOpenURL { url in
+                    if url.scheme == "pupudiary", url.host == "quicklog" {
+                        DiagLog.log("通过链接打开 App 并记录")
+                        let r = store.quickLog()
+                        router.tab = .home
+                        router.quickLogged = r.id
+                    } else {
+                        router.handle(url)
+                    }
+                }
         }
     }
 }
@@ -25,6 +34,8 @@ final class Router {
     var tab: Tab = .home
     /// 弹出新建记录
     var showNewRecord = false
+    /// 刚通过控制中心 / 链接一键记录的那条，首页弹出提示
+    var quickLogged: UUID?
     /// 从其他 App 共享 / 打开过来的备份文件
     var incomingFile: IncomingFile?
 

@@ -9,7 +9,7 @@ enum DiagLog {
         Bundle.main.bundleURL.pathExtension == "appex" ? "扩展" : "App"
     }
 
-    private static var fileURL: URL {
+    static var fileURL: URL {
         let dir = AppGroup.containerURL.appendingPathComponent("Pupudiary", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("diagnostics.log")
@@ -48,5 +48,37 @@ enum DiagLog {
     static var environmentSummary: String {
         let bid = Bundle.main.bundleIdentifier ?? "?"
         return "bundle=\(bid) group=\(AppGroup.identifier) shared=\(AppGroup.isShared)"
+    }
+}
+
+/// 扩展崩溃时往诊断日志里写一行（只用于排查问题）
+enum CrashCatcher {
+    private static var path: UnsafeMutablePointer<CChar>?
+    private static var messages = [UnsafeMutablePointer<CChar>?](repeating: nil, count: 32)
+    private static var installed = false
+
+    static func install() {
+        guard !installed else { return }
+        installed = true
+        path = strdup(DiagLog.fileURL.path)
+        let process = DiagLog.processName
+        let signals: [Int32] = [SIGABRT, SIGTRAP, SIGSEGV, SIGBUS, SIGILL, SIGFPE]
+        for s in signals {
+            messages[Int(s)] = strdup("--:-- [\(process)] ‼️ 崩溃 signal=\(s)\n")
+            signal(s) { sig in
+                if let p = CrashCatcher.path, let m = CrashCatcher.messages[Int(sig)] {
+                    let fd = open(p, O_WRONLY | O_APPEND | O_CREAT, 0o644)
+                    if fd >= 0 {
+                        _ = write(fd, m, strlen(m))
+                        close(fd)
+                    }
+                }
+                signal(sig, SIG_DFL)
+                raise(sig)
+            }
+        }
+        NSSetUncaughtExceptionHandler { e in
+            DiagLog.log("‼️ 异常 \(e.name.rawValue): \(e.reason ?? "")")
+        }
     }
 }

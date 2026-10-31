@@ -9,6 +9,7 @@ final class RecordStore {
     private var loadedAt: TimeInterval = 0
 
     init() {
+        CrashCatcher.install()
         DiagLog.log("App 启动 \(DiagLog.environmentSummary)")
         RecordStorage.migrateLocalDataIfNeeded()
         reload()

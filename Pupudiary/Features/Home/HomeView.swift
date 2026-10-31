@@ -35,6 +35,13 @@ struct HomeView: View {
             }
         }
         .sheet(item: $editing) { RecordEditorView(record: $0) }
+        .onChange(of: router.quickLogged) { _, id in
+            guard let id, let r = store.record(id: id) else { return }
+            Haptics.success()
+            bounce.toggle()
+            showToast(Toast(message: "已记录 · \(r.bristol.nickname)", recordID: r.id))
+            router.quickLogged = nil
+        }
         .sheet(isPresented: $creating) { RecordEditorView(record: nil) }
     }
 

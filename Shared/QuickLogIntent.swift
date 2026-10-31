@@ -77,3 +77,22 @@ struct QuickLogControlIntent: AppIntent {
         return .result()
     }
 }
+
+/// 控制中心备选：在 App 进程里执行（会打开 App）
+struct QuickLogInAppIntent: AppIntent {
+    static var title: LocalizedStringResource = "噗！记一下（App 内）"
+    static var description = IntentDescription("打开噗噗手帐并记录一次。")
+    static var openAppWhenRun: Bool = true
+    static var isDiscoverable: Bool = false
+
+    init() {}
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        DiagLog.log("App 内动作开始执行")
+        let record = PoopRecord(timestamp: Date(), bristol: SharedSettings.quickDefaultType, isQuick: true)
+        let all = RecordStorage.mutate { $0.append(record) }
+        DiagLog.log("App 内动作完成，共 \(all.count) 条")
+        return .result()
+    }
+}

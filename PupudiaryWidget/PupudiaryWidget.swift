@@ -5,6 +5,7 @@ import AppIntents
 @main
 struct PupudiaryWidgetBundle: WidgetBundle {
     init() {
+        CrashCatcher.install()
         DiagLog.log("扩展启动 \(DiagLog.environmentSummary)")
     }
 
@@ -13,6 +14,8 @@ struct PupudiaryWidgetBundle: WidgetBundle {
         PupudiaryLockWidget()
         if #available(iOSApplicationExtension 18.0, *) {
             QuickLogControl()
+            QuickLogOpenAppControl()
+            QuickLogInAppControl()
         }
     }
 }
@@ -445,5 +448,35 @@ struct QuickLogControl: ControlWidget {
         }
         .displayName("噗！记一下")
         .description("一键记录一次噗噗。")
+    }
+}
+
+/// 备选 1：用系统自带的「打开链接」动作，不依赖自定义动作；打开 App 后立刻记一笔
+@available(iOSApplicationExtension 18.0, *)
+struct QuickLogOpenAppControl: ControlWidget {
+    var body: some ControlWidgetConfiguration {
+        StaticControlConfiguration(kind: "PupudiaryQuickLogOpenAppControl") {
+            let _ = DiagLog.log("控制中心按钮（打开 App）：系统请求按钮样式")
+            ControlWidgetButton(action: OpenURLIntent(URL(string: "pupudiary://quicklog")!)) {
+                Label("噗！记一下（打开 App）", systemImage: "arrow.up.forward.app")
+            }
+        }
+        .displayName("噗！记一下（打开 App）")
+        .description("打开噗噗手帐并立刻记录一次。")
+    }
+}
+
+/// 备选 2：自定义动作，但在 App 进程里执行（App 的签名是完整的）
+@available(iOSApplicationExtension 18.0, *)
+struct QuickLogInAppControl: ControlWidget {
+    var body: some ControlWidgetConfiguration {
+        StaticControlConfiguration(kind: "PupudiaryQuickLogInAppControl") {
+            let _ = DiagLog.log("控制中心按钮（App 内）：系统请求按钮样式")
+            ControlWidgetButton(action: QuickLogInAppIntent()) {
+                Label("噗！记一下（App 内）", systemImage: "plus.circle.fill")
+            }
+        }
+        .displayName("噗！记一下（App 内）")
+        .description("在 App 里执行一键记录。")
     }
 }
