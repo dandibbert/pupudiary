@@ -70,17 +70,19 @@ enum AppGroup {
         return urls
     }
 
-    /// embedded.mobileprovision 是 CMS 签名包着的 XML plist，直接截出 plist 部分解析
     private static func groups(inProfileAt url: URL) -> [String]? {
+        guard let ent = profile(at: url)?["Entitlements"] as? [String: Any] else { return nil }
+        return ent["com.apple.security.application-groups"] as? [String]
+    }
+
+    /// embedded.mobileprovision 是 CMS 签名包着的 XML plist，直接截出 plist 部分解析
+    static func profile(at url: URL) -> [String: Any]? {
         guard let data = try? Data(contentsOf: url),
               let start = data.range(of: Data("<?xml".utf8)),
               let end = data.range(of: Data("</plist>".utf8), in: start.lowerBound..<data.endIndex)
         else { return nil }
         let plistData = data.subdata(in: start.lowerBound..<end.upperBound)
-        guard let plist = try? PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any],
-              let ent = plist["Entitlements"] as? [String: Any]
-        else { return nil }
-        return ent["com.apple.security.application-groups"] as? [String]
+        return try? PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any]
     }
 }
 

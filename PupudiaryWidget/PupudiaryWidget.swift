@@ -4,6 +4,10 @@ import AppIntents
 
 @main
 struct PupudiaryWidgetBundle: WidgetBundle {
+    init() {
+        DiagLog.log("扩展启动 \(DiagLog.environmentSummary)")
+    }
+
     var body: some Widget {
         PupudiaryWidget()
         PupudiaryLockWidget()
@@ -60,6 +64,7 @@ struct PoopProvider: TimelineProvider {
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<PoopEntry>) -> Void) {
+        DiagLog.log("小组件请求时间线 family=\(context.family)")
         let now = Date()
         var entries = [PoopEntry.make(at: now)]
         let cal = Calendar.current
@@ -429,6 +434,7 @@ struct QuickLogControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         // 改过 kind：旧版本加到控制中心的按钮会失效，需要删掉重新添加
         StaticControlConfiguration(kind: "PupudiaryQuickLogControl") {
+            let _ = DiagLog.log("控制中心按钮：系统请求按钮样式")
             ControlWidgetButton(action: QuickLogControlIntent()) {
                 Label {
                     Text("噗！记一下")

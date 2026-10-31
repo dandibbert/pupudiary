@@ -251,6 +251,12 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
             Divider().padding(.leading, 44)
+            NavigationLink { DiagnosticsView() } label: {
+                SettingRow(icon: "stethoscope", color: GutStatus.loose.color,
+                           title: "诊断信息", subtitle: "小组件 / 控制中心出问题时用") { Chevron() }
+            }
+            .buttonStyle(.plain)
+            Divider().padding(.leading, 44)
             SettingRow(icon: "info", color: Theme.subtle, title: "版本") {
                 Text(appVersion).font(.cute(14, .medium)).foregroundStyle(Theme.subtle)
             }
