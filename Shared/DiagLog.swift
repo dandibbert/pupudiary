@@ -42,6 +42,17 @@ enum DiagLog {
 
     static func clear() {
         try? FileManager.default.removeItem(at: fileURL)
+        for name in ["stderr-extension.log", "stderr-app.log"] {
+            let url = fileURL.deletingLastPathComponent().appendingPathComponent(name)
+            try? "".write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
+    /// 某个进程 stderr 文件的最后几行
+    static func stderrTail(_ name: String, lines: Int = 60) -> [String] {
+        let url = fileURL.deletingLastPathComponent().appendingPathComponent(name)
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        return Array(text.split(separator: "\n").map(String.init).suffix(lines))
     }
 
     /// 本进程看到的签名 / App Group 情况，扩展启动时写一条
@@ -57,9 +68,23 @@ enum CrashCatcher {
     private static var messages = [UnsafeMutablePointer<CChar>?](repeating: nil, count: 32)
     private static var installed = false
 
+    /// 系统框架 / Swift 运行时崩溃前会把原因（如 "Fatal error: …"）打印到 stderr，这里把它存进文件
+    static var stderrURL: URL {
+        DiagLog.fileURL.deletingLastPathComponent()
+            .appendingPathComponent("stderr-\(Bundle.main.bundleURL.pathExtension == "appex" ? "extension" : "app").log")
+    }
+
     static func install() {
         guard !installed else { return }
         installed = true
+        let errURL = stderrURL
+        if let size = (try? FileManager.default.attributesOfItem(atPath: errURL.path))?[.size] as? Int, size > 200_000 {
+            try? FileManager.default.removeItem(at: errURL)
+        }
+        if freopen(errURL.path, "a", stderr) != nil {
+            setvbuf(stderr, nil, _IONBF, 0)
+            fputs("---- \(Date()) 进程启动 ----\n", stderr)
+        }
         path = strdup(DiagLog.fileURL.path)
         let process = DiagLog.processName
         let signals: [Int32] = [SIGABRT, SIGTRAP, SIGSEGV, SIGBUS, SIGILL, SIGFPE]

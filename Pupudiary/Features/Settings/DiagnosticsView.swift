@@ -253,6 +253,11 @@ struct DiagReport {
             lines.append("控制中心: iOS 18 以下不支持")
         }
 
+        // 扩展的错误输出（崩溃原因）
+        let errLines = DiagLog.stderrTail("stderr-extension.log")
+        lines.append("== 扩展错误输出（\(errLines.count) 行）==")
+        lines.append(contentsOf: errLines.isEmpty ? ["无"] : errLines)
+
         // 日志
         let log = DiagLog.read()
         lines.append("== 最近日志（\(log.count) 条）==")
@@ -309,11 +314,6 @@ struct DiagReport {
 
         if log.contains(where: { $0.contains("‼️") }) {
             checks.insert(Check(level: .warn, title: "日志里有崩溃记录", detail: "见下方日志中带 ‼️ 的行。"), at: 0)
-        }
-        for (name, key) in [("打开 App", "（打开 App）"), ("App 内", "（App 内）")] {
-            if log.contains(where: { $0.contains("控制中心按钮\(key)") }) {
-                checks.append(Check(level: .info, title: "系统请求过备选按钮「\(name)」", detail: ""))
-            }
         }
         r.checks = checks
         r.text = lines.joined(separator: "\n")
