@@ -58,3 +58,19 @@ struct QuickLogIntent: AppIntent {
         return .result(dialog: "\(message)")
     }
 }
+
+/// 控制中心专用：不带参数、不返回对话框（控制中心没有地方显示对话框）
+struct QuickLogControlIntent: AppIntent {
+    static var title: LocalizedStringResource = "噗！记一下"
+    static var description = IntentDescription("在控制中心一键记录一次噗噗。")
+    static var openAppWhenRun: Bool = false
+    static var isDiscoverable: Bool = false
+
+    init() {}
+
+    func perform() async throws -> some IntentResult {
+        let record = PoopRecord(timestamp: Date(), bristol: SharedSettings.quickDefaultType, isQuick: true)
+        RecordStorage.mutate { $0.append(record) }
+        return .result()
+    }
+}

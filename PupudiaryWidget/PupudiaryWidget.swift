@@ -427,9 +427,14 @@ private struct LockView: View {
 @available(iOSApplicationExtension 18.0, *)
 struct QuickLogControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
-        StaticControlConfiguration(kind: "com.pupudiary.quicklog") {
-            ControlWidgetButton(action: QuickLogIntent(status: .usual)) {
-                Label("噗！记一下", systemImage: "sparkles")
+        // 改过 kind：旧版本加到控制中心的按钮会失效，需要删掉重新添加
+        StaticControlConfiguration(kind: "PupudiaryQuickLogControl") {
+            ControlWidgetButton(action: QuickLogControlIntent()) {
+                Label {
+                    Text("噗！记一下")
+                } icon: {
+                    Image(systemName: "sparkles")
+                }
             }
         }
         .displayName("噗！记一下")
