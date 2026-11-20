@@ -14,9 +14,10 @@ struct PupudiaryApp: App {
                 .onOpenURL { url in
                     if url.scheme == "pupudiary", url.host == "quicklog" {
                         DiagLog.log("通过链接打开 App 并记录")
-                        let r = store.quickLog()
-                        router.tab = .home
-                        router.quickLogged = r.id
+                        if let r = store.quickLog() {
+                            router.tab = .home
+                            router.quickLogged = r.id
+                        }
                     } else {
                         router.handle(url)
                     }
