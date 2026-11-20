@@ -160,7 +160,10 @@ struct ImportView: View {
 
             switch parsed {
             case let .success((source, records)):
-                let added = store.merge(records)
+                guard let added = store.merge(records) else {
+                    state = .failed(store.storageError ?? "存储写入失败，未完成导入")
+                    return
+                }
                 let sorted = records.map(\.timestamp).sorted()
                 Haptics.success()
                 state = .done(source: source, total: records.count, added: added, first: sorted.first, last: sorted.last)
