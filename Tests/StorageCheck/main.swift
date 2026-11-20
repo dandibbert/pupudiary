@@ -1,8 +1,8 @@
 // macOS 独立存储回归测试；无需模拟器和开发者签名。
 import Foundation
 
-func check(_ condition: @autoclosure () -> Bool, _ label: String) {
-    guard condition() else {
+func check(_ condition: Bool, _ label: String) {
+    guard condition else {
         fputs("❌ \(label)\n", stderr)
         exit(1)
     }
