@@ -53,7 +53,7 @@ struct QuickLogIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         DiagLog.log("一键记录动作执行 status=\(status.rawValue)")
         let record = PoopRecord(timestamp: Date(), bristol: status.bristol, isQuick: true)
-        let all = RecordStorage.mutate { $0.append(record) }
+        let all = try RecordStorage.mutate { $0.append(record) }
         let today = GutStats(records: all).today.count
         let message = "已记录！今天第 \(today) 次 ✨"
         return .result(dialog: "\(message)")
@@ -72,7 +72,7 @@ struct QuickLogControlIntent: AppIntent {
     func perform() async throws -> some IntentResult {
         DiagLog.log("控制中心动作开始执行")
         let record = PoopRecord(timestamp: Date(), bristol: SharedSettings.quickDefaultType, isQuick: true)
-        let all = RecordStorage.mutate { $0.append(record) }
+        let all = try RecordStorage.mutate { $0.append(record) }
         DiagLog.log("控制中心动作完成，共 \(all.count) 条")
         return .result()
     }
