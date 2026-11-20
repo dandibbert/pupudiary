@@ -192,7 +192,7 @@ struct HomeView: View {
     private var quickType: BristolType { BristolType(rawValue: quickTypeRaw) ?? .t4 }
 
     private func quickLog(_ type: BristolType?) {
-        let r = store.quickLog(type ?? quickType)
+        guard let r = store.quickLog(type ?? quickType) else { return }
         Haptics.success()
         bounce.toggle()
         showToast(Toast(message: "已记录 · \(r.bristol.nickname)", recordID: r.id))
