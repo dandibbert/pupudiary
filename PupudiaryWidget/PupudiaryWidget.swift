@@ -28,6 +28,7 @@ struct PoopEntry: TimelineEntry {
     let week: [DaySummary]
     let headline: Insight
     let quickType: BristolType
+    let storageError: Bool
 
     /// 刚刚（2 分钟内）记录过，用来给按钮一个“已记录”的反馈
     var justLogged: Bool {
@@ -36,14 +37,25 @@ struct PoopEntry: TimelineEntry {
     }
 
     static func make(at date: Date = Date()) -> PoopEntry {
-        let stats = GutStats(records: RecordStorage.load(), now: date)
+        let records: [PoopRecord]
+        var failed = false
+        do {
+            records = try RecordStorage.load()
+        } catch {
+            // 不再把读取失败显示成「还没有记录 / 今日 0 次」。
+            failed = true
+            records = []
+            DiagLog.log("‼️ 小组件读取失败（未显示零记录）：\(error.localizedDescription)")
+        }
+        let stats = GutStats(records: records, now: date)
         return PoopEntry(date: date,
                          todayCount: stats.today.count,
                          today: stats.today,
                          last: stats.last,
                          week: stats.days(7),
                          headline: stats.headline,
-                         quickType: SharedSettings.quickDefaultType)
+                         quickType: SharedSettings.quickDefaultType,
+                         storageError: failed)
     }
 
     static var placeholder: PoopEntry {
@@ -53,7 +65,7 @@ struct PoopEntry: TimelineEntry {
         }
         let stats = GutStats(records: samples, now: now)
         return PoopEntry(date: now, todayCount: 1, today: Array(samples.prefix(1)), last: samples.first, week: stats.days(7),
-                         headline: stats.headline, quickType: .t4)
+                         headline: stats.headline, quickType: .t4, storageError: false)
     }
 }
 
@@ -101,10 +113,26 @@ struct PupudiaryWidgetView: View {
     let entry: PoopEntry
 
     var body: some View {
-        switch family {
-        case .systemMedium: MediumView(entry: entry)
-        case .systemLarge: LargeView(entry: entry)
-        default: SmallView(entry: entry)
+        if entry.storageError {
+            VStack(alignment: .leading, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Theme.warning)
+                Text("记录读取异常")
+                    .font(.cute(16, .heavy))
+                    .foregroundStyle(Theme.ink)
+                Text("已暂停显示数据和一键记录，请打开 App 检查")
+                    .font(.cute(12, .medium))
+                    .foregroundStyle(Theme.subtle)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .widgetURL(URL(string: "pupudiary://home"))
+        } else {
+            switch family {
+            case .systemMedium: MediumView(entry: entry)
+            case .systemLarge: LargeView(entry: entry)
+            default: SmallView(entry: entry)
+            }
         }
     }
 }
