@@ -33,7 +33,7 @@ struct SettingsView: View {
             }
             .background(Theme.background.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
-            .confirmationDialog("确定清空全部 \(store.records.count) 条记录吗？此操作无法撤销。",
+            .confirmationDialog("确定清空当前 \(store.records.count) 条记录吗？自动备份仍会保留，可在「自动备份与恢复」找回。",
                                 isPresented: $confirmClear, titleVisibility: .visible) {
                 Button("清空", role: .destructive) { store.deleteAll() }
             }
