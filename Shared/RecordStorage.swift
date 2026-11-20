@@ -86,84 +86,280 @@ enum AppGroup {
     }
 }
 
-/// 记录以 JSON 文件保存，所有读写都经过文件协调，App 和小组件同时写也不会丢数据
-enum RecordStorage {
-    private static var directory: URL {
-        let dir = AppGroup.containerURL.appendingPathComponent("Pupudiary", isDirectory: true)
-        if !FileManager.default.fileExists(atPath: dir.path) {
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+/// 数据不能被「读取失败 => 空数组」这种逻辑清空。
+/// App/Widget 都必须在读取、协调、备份和写入成功后才能报告保存成功。
+enum RecordStorageError: LocalizedError {
+    case missingPreviousFile
+    case unreadable(String)
+    case corrupt(String)
+    case coordination(String)
+    case invalidBackup(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingPreviousFile:
+            return "原记录文件意外消失，已阻止写入。请在「我的 › 自动备份」检查历史快照。"
+        case let .unreadable(reason):
+            return "记录文件暂时无法读取，未进行写入：\(reason)"
+        case let .corrupt(reason):
+            return "记录文件格式异常，已阻止写入以免覆盖旧数据：\(reason)"
+        case let .coordination(reason):
+            return "记录存储协调失败，未确认写入：\(reason)"
+        case let .invalidBackup(reason):
+            return "备份无法恢复：\(reason)"
         }
-        return dir
+    }
+
+    var permitsExplicitRepair: Bool {
+        switch self {
+        case .corrupt, .missingPreviousFile: return true
+        default: return false
+        }
+    }
+}
+
+struct RecordSnapshot: Identifiable {
+    let url: URL
+    let createdAt: Date
+    let count: Int
+
+    var id: String { url.lastPathComponent }
+}
+
+/// 保留原有的 App Group 与 Pupudiary/records.json 路径，兼容已安装的 Claude 版。
+enum RecordStorage {
+    #if DEBUG
+    /// 独立 macOS 存储测试使用；Release 不编译此入口。
+    static var testDirectory: URL?
+    #endif
+
+    private static var directory: URL {
+        #if DEBUG
+        if let testDirectory { return testDirectory }
+        #endif
+        return AppGroup.containerURL.appendingPathComponent("Pupudiary", isDirectory: true)
     }
 
     static var fileURL: URL { directory.appendingPathComponent("records.json") }
+    private static var backupsURL: URL { directory.appendingPathComponent("Backups", isDirectory: true) }
+    private static var markerURL: URL { directory.appendingPathComponent(".records-initialized") }
+    private static let maximumSnapshots = 40
 
-    /// 以前没连上 App Group 时保存在 App 自己目录里的数据，连上后自动并入共享容器（只做一次）
-    static func migrateLocalDataIfNeeded() {
+    /// 旧版本在 App 私有目录中的文件仅在成功合并后才改名，不允许无声丢弃。
+    static func migrateLocalDataIfNeeded() throws {
         guard AppGroup.isShared else { return }
         let local = AppGroup.localContainer
             .appendingPathComponent("Pupudiary", isDirectory: true)
             .appendingPathComponent("records.json")
         guard local != fileURL, FileManager.default.fileExists(atPath: local.path) else { return }
-        let old = decode(at: local)
+
+        let old = try read(at: local).records
         if !old.isEmpty {
-            mutate { list in
-                let ids = Set(list.map(\.id))
-                list.append(contentsOf: old.filter { !ids.contains($0.id) })
+            _ = try mutate { list in
+                var ids = Set(list.map(\.id))
+                for record in old where ids.insert(record.id).inserted {
+                    list.append(record)
+                }
             }
         }
-        try? FileManager.default.moveItem(at: local, to: local.appendingPathExtension("migrated"))
+        let migrated = local.appendingPathExtension("migrated")
+        // 如果已经有迁移副本，保留两个源文件而不是覆盖旧副本。
+        if !FileManager.default.fileExists(atPath: migrated.path) {
+            try FileManager.default.moveItem(at: local, to: migrated)
+        }
     }
 
-    static let encoder: JSONEncoder = {
+    /// 每次创建独立的编解码器，避免多线程共用可变实例。
+    static var encoder: JSONEncoder {
         let e = JSONEncoder()
         e.dateEncodingStrategy = .iso8601
         e.outputFormatting = [.prettyPrinted, .sortedKeys]
         return e
-    }()
+    }
 
-    static let decoder: JSONDecoder = {
+    static var decoder: JSONDecoder {
         let d = JSONDecoder()
         d.dateDecodingStrategy = .iso8601
         return d
-    }()
+    }
 
-    /// 读取全部记录（按时间倒序）
-    static func load() -> [PoopRecord] {
-        var result: [PoopRecord] = []
-        var coordError: NSError?
-        NSFileCoordinator().coordinate(readingItemAt: fileURL, options: [], error: &coordError) { url in
-            result = decode(at: url)
+    /// nil 原始数据只表示第一次安装；零字节/解码错误/曾有记录却丢文件，全部报错。
+    private static func read(at url: URL) throws -> (records: [PoopRecord], bytes: Data?) {
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: url.path) {
+            if url == fileURL &&
+                (fm.fileExists(atPath: markerURL.path) || hasSnapshotFiles()) {
+                throw RecordStorageError.missingPreviousFile
+            }
+            return ([], nil)
         }
+
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            throw RecordStorageError.unreadable(error.localizedDescription)
+        }
+        guard !data.isEmpty else { throw RecordStorageError.corrupt("文件为 0 字节") }
+        do {
+            let records = try decoder.decode([PoopRecord].self, from: data)
+            guard Set(records.map(\.id)).count == records.count else {
+                throw RecordStorageError.corrupt("发现重复的记录 ID")
+            }
+            return (records, data)
+        } catch let error as RecordStorageError {
+            throw error
+        } catch {
+            throw RecordStorageError.corrupt(error.localizedDescription)
+        }
+    }
+
+    /// 读取失败不会再显示为「零条记录」。
+    static func load() throws -> [PoopRecord] {
+        let url = fileURL
+        if !FileManager.default.fileExists(atPath: url.path) {
+            return try read(at: url).records
+        }
+
+        var result: [PoopRecord]?
+        var readError: Error?
+        var coordError: NSError?
+        NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordError) { target in
+            do { result = try read(at: target).records }
+            catch { readError = error }
+        }
+        if let coordError { throw RecordStorageError.coordination(coordError.localizedDescription) }
+        if let readError { throw readError }
+        guard let result else { throw RecordStorageError.coordination("读取协调器未返回数据") }
         return result.sorted { $0.timestamp > $1.timestamp }
     }
 
-    /// 读-改-写，一次完成
     @discardableResult
-    static func mutate(_ change: (inout [PoopRecord]) -> Void) -> [PoopRecord] {
-        var result: [PoopRecord] = []
+    static func mutate(_ change: (inout [PoopRecord]) -> Void) throws -> [PoopRecord] {
+        try coordinatedWrite(change, allowRepair: false)
+    }
+
+    /// 所有写入都串行协调：读取成功 -> 先备份旧字节 -> 原子写入 -> 通知成功。
+    @discardableResult
+    private static func coordinatedWrite(
+        _ change: (inout [PoopRecord]) -> Void,
+        allowRepair: Bool
+    ) throws -> [PoopRecord] {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var result: [PoopRecord]?
+        var writeError: Error?
         var coordError: NSError?
+
         withoutActuallyEscaping(change) { change in
-            NSFileCoordinator().coordinate(writingItemAt: fileURL, options: [], error: &coordError) { url in
-                var records = decode(at: url)
-                change(&records)
-                records.sort { $0.timestamp > $1.timestamp }
-                if let data = try? encoder.encode(records) {
-                    try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            NSFileCoordinator().coordinate(writingItemAt: fileURL, options: [], error: &coordError) { target in
+                do {
+                    var records: [PoopRecord]
+                    var original: Data?
+                    do {
+                        let current = try read(at: target)
+                        records = current.records
+                        original = current.bytes
+                    } catch let storageError as RecordStorageError {
+                        guard allowRepair && storageError.permitsExplicitRepair else { throw storageError }
+                        // 用户显式选择恢复时也先隔离损坏文件，不直接丢弃任何原始字节。
+                        if FileManager.default.fileExists(atPath: target.path) {
+                            let damaged = try Data(contentsOf: target)
+                            try saveCopy(damaged, prefix: "damaged")
+                        }
+                        records = []
+                        original = nil
+                    }
+
+                    change(&records)
+                    records.sort { $0.timestamp > $1.timestamp }
+                    let encoded = try encoder.encode(records)
+                    // 必须先成功保留旧数据；备份失败时绝不碰原文件。
+                    if let original { try saveCopy(original, prefix: "records") }
+                    try encoded.write(to: target, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                    result = records
+                    // 仅记录提交后的附属清理可失败，不允许清理失败伪装成保存失败。
+                    try? "1".write(to: markerURL, atomically: true, encoding: .utf8)
+                    pruneSnapshots()
+                } catch {
+                    writeError = error
                 }
-                result = records
             }
         }
+
+        if let coordError { throw RecordStorageError.coordination(coordError.localizedDescription) }
+        if let writeError { throw writeError }
+        guard let result else { throw RecordStorageError.coordination("写入协调器未完成") }
         markChanged()
         return result
     }
 
-    private static func decode(at url: URL) -> [PoopRecord] {
-        guard let data = try? Data(contentsOf: url), !data.isEmpty else { return [] }
-        return (try? decoder.decode([PoopRecord].self, from: data)) ?? []
+    private static func saveCopy(_ bytes: Data, prefix: String) throws {
+        try FileManager.default.createDirectory(at: backupsURL, withIntermediateDirectories: true)
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let name = "\(prefix)-\(timestamp)-\(UUID().uuidString).json"
+        try bytes.write(to: backupsURL.appendingPathComponent(name),
+                        options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
-    /// 通知小组件刷新，并留下修改时间戳供 App 回到前台时判断
+    private static func hasSnapshotFiles() -> Bool {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: backupsURL.path) else { return false }
+        return names.contains { $0.hasPrefix("records-") && $0.hasSuffix(".json") }
+    }
+
+    /// 只修剪正常历史快照，永不自动删除 damaged- 原始抢救文件。
+    private static func pruneSnapshots() {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: backupsURL.path) else { return }
+        let snapshots = names.filter { $0.hasPrefix("records-") && $0.hasSuffix(".json") }.sorted(by: >)
+        for name in snapshots.dropFirst(maximumSnapshots) {
+            try? FileManager.default.removeItem(at: backupsURL.appendingPathComponent(name))
+        }
+    }
+
+    /// 每次正常保存前留一份快照，最多留最近 40 次。恢复只合并缺失的 ID。
+    static func snapshots() throws -> [RecordSnapshot] {
+        guard FileManager.default.fileExists(atPath: backupsURL.path) else { return [] }
+        let urls = try FileManager.default.contentsOfDirectory(
+            at: backupsURL, includingPropertiesForKeys: [.contentModificationDateKey])
+        return urls.compactMap { url -> RecordSnapshot? in
+            guard url.lastPathComponent.hasPrefix("records-"), url.pathExtension == "json",
+                  let data = try? Data(contentsOf: url),
+                  let rows = try? decoder.decode([PoopRecord].self, from: data),
+                  let date = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+            else { return nil }
+            return RecordSnapshot(url: url, createdAt: date, count: rows.count)
+        }.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    /// 显式恢复：保留当前记录；若当前 JSON 损坏，先备份损坏原件再修复。
+    @discardableResult
+    static func restoreMissingRecords(from snapshotID: String) throws -> Int {
+        guard snapshotID.hasPrefix("records-"), snapshotID.hasSuffix(".json"),
+              !snapshotID.contains("/"), !snapshotID.contains("\\") else {
+            throw RecordStorageError.invalidBackup("无效备份名称")
+        }
+        let source = backupsURL.appendingPathComponent(snapshotID)
+        let data: Data
+        do { data = try Data(contentsOf: source) }
+        catch { throw RecordStorageError.invalidBackup(error.localizedDescription) }
+        let incoming: [PoopRecord]
+        do { incoming = try decoder.decode([PoopRecord].self, from: data) }
+        catch { throw RecordStorageError.invalidBackup(error.localizedDescription) }
+        guard Set(incoming.map(\.id)).count == incoming.count else {
+            throw RecordStorageError.invalidBackup("备份中有重复 ID")
+        }
+
+        var added = 0
+        _ = try coordinatedWrite({ list in
+            var ids = Set(list.map(\.id))
+            for record in incoming where ids.insert(record.id).inserted {
+                list.append(record)
+                added += 1
+            }
+        }, allowRepair: true)
+        return added
+    }
+
+    /// 只有成功提交后才更新时间戳 / 刷新小组件。
     static func markChanged() {
         AppGroup.defaults.set(Date().timeIntervalSince1970, forKey: "lastChange")
         #if canImport(WidgetKit)
