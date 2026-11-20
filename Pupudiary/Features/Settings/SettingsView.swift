@@ -228,6 +228,12 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
             Divider().padding(.leading, 44)
+            NavigationLink { StorageBackupView() } label: {
+                SettingRow(icon: "externaldrive.badge.timemachine", color: Theme.primary,
+                           title: "自动备份与恢复", subtitle: "每次保存前自动留档，可合并恢复缺失记录") { Chevron() }
+            }
+            .buttonStyle(.plain)
+            Divider().padding(.leading, 44)
             Button { confirmClear = true } label: {
                 SettingRow(icon: "trash.fill", color: Theme.warning, title: "清空所有记录") { EmptyView() }
             }
