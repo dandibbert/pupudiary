@@ -8,6 +8,7 @@ struct RecordEditorView: View {
     @State private var draft: PoopRecord
     @State private var confirmDelete = false
     @State private var showGuide = false
+    @State private var operationError: String?
 
     init(record: PoopRecord?, defaultDate: Date? = nil) {
         isNew = record == nil
@@ -72,12 +73,23 @@ struct RecordEditorView: View {
             }
             .confirmationDialog("确定删除这条记录吗？", isPresented: $confirmDelete, titleVisibility: .visible) {
                 Button("删除", role: .destructive) {
-                    store.delete(draft)
-                    dismiss()
+                    if store.delete(draft) {
+                        dismiss()
+                    } else {
+                        operationError = store.storageError ?? "删除失败"
+                    }
                 }
             }
             .sheet(isPresented: $showGuide) {
                 BristolGuideView()
+            }
+            .alert("保存失败", isPresented: Binding(
+                get: { operationError != nil },
+                set: { if !$0 { operationError = nil } }
+            )) {
+                Button("好的", role: .cancel) { operationError = nil }
+            } message: {
+                Text(operationError ?? "操作失败，请稍后重试")
             }
         }
     }
@@ -85,7 +97,10 @@ struct RecordEditorView: View {
     private func save() {
         draft.isQuick = false
         draft.note = draft.note.trimmingCharacters(in: .whitespacesAndNewlines)
-        store.save(draft)
+        guard store.save(draft) else {
+            operationError = store.storageError ?? "记录未能保存"
+            return
+        }
         Haptics.success()
         dismiss()
     }
