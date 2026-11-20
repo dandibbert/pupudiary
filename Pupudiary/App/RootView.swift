@@ -75,6 +75,14 @@ struct RootView: View {
         .task {
             if locked && lockEnabled { unlock() }
         }
+        .alert("记录存储异常", isPresented: Binding(
+            get: { store.storageError != nil },
+            set: { if !$0 { store.dismissStorageError() } }
+        )) {
+            Button("知道了", role: .cancel) { store.dismissStorageError() }
+        } message: {
+            Text(store.storageError ?? "读取或写入失败，已保护原记录")
+        }
     }
 
     private func unlock() {
