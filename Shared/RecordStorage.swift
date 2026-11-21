@@ -176,6 +176,12 @@ enum RecordStorage {
         var errors: [String] = []
         var known = Set(try load().map(\.id))
         let fm = FileManager.default
+        do {
+            let copied = try preserveAlternateSnapshots()
+            if copied > 0 { DiagLog.log("从其他授权 App Group 保留了 \(copied) 份历史快照") }
+        } catch {
+            errors.append("迁移其他 Group 的历史快照失败：\(error.localizedDescription)")
+        }
 
         for group in AppGroup.candidateGroups where group != AppGroup.identifier {
             guard let container = fm.containerURL(forSecurityApplicationGroupIdentifier: group) else { continue }
@@ -213,6 +219,30 @@ enum RecordStorage {
         return merged
     }
 
+    /// 将其他已授权 App Group 中的旧快照复制到当前目录，保留其原始文件。
+    /// 单独使用 recovered- 前缀，不受「最近 40 次自动写入快照」清理策略影响。
+    private static func preserveAlternateSnapshots() throws -> Int {
+        let fm = FileManager.default
+        var copied = 0
+        for group in AppGroup.candidateGroups where group != AppGroup.identifier {
+            guard let root = fm.containerURL(forSecurityApplicationGroupIdentifier: group) else { continue }
+            let sourceDir = root.appendingPathComponent("Pupudiary/Backups", isDirectory: true)
+            guard fm.fileExists(atPath: sourceDir.path) else { continue }
+            let names = try fm.contentsOfDirectory(atPath: sourceDir.path)
+            for name in names where
+                (name.hasPrefix("records-") || name.hasPrefix("recovered-")) && name.hasSuffix(".json") {
+                let safeGroup = group.replacingOccurrences(of: ".", with: "-")
+                let targetName = "recovered-\(safeGroup)-\(name)"
+                let dest = backupsURL.appendingPathComponent(targetName)
+                if fm.fileExists(atPath: dest.path) { continue }
+                try fm.createDirectory(at: backupsURL, withIntermediateDirectories: true)
+                try fm.copyItem(at: sourceDir.appendingPathComponent(name), to: dest)
+                copied += 1
+            }
+        }
+        return copied
+    }
+
     /// 只读检查：能直接显示当前进程使用的 group，以及其他容器中的文件大小、
     /// 记录数、历史快照数。不能解码时明确注明，绝不显示为「0 条」。
     static func storageSurvey() -> [String] {
@@ -230,7 +260,7 @@ enum RecordStorage {
             let url = dir.appendingPathComponent("records.json")
             let backups = dir.appendingPathComponent("Backups", isDirectory: true)
             let backupCount = (try? fm.contentsOfDirectory(atPath: backups.path))?
-                .filter { $0.hasPrefix("records-") && $0.hasSuffix(".json") }.count ?? 0
+                .filter { ($0.hasPrefix("records-") || $0.hasPrefix("recovered-")) && $0.hasSuffix(".json") }.count ?? 0
             if !fm.fileExists(atPath: url.path) {
                 lines.append("\(group) | 无 records.json | 快照 \(backupCount)")
                 continue
@@ -424,7 +454,7 @@ enum RecordStorage {
         let urls = try FileManager.default.contentsOfDirectory(
             at: backupsURL, includingPropertiesForKeys: [.contentModificationDateKey])
         return urls.compactMap { url -> RecordSnapshot? in
-            guard url.lastPathComponent.hasPrefix("records-"), url.pathExtension == "json",
+            guard (url.lastPathComponent.hasPrefix("records-") || url.lastPathComponent.hasPrefix("recovered-")), url.pathExtension == "json",
                   let data = try? Data(contentsOf: url),
                   let rows = try? decoder.decode([PoopRecord].self, from: data),
                   let date = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
@@ -436,7 +466,8 @@ enum RecordStorage {
     /// 显式恢复：保留当前记录；若当前 JSON 损坏，先备份损坏原件再修复。
     @discardableResult
     static func restoreMissingRecords(from snapshotID: String) throws -> Int {
-        guard snapshotID.hasPrefix("records-"), snapshotID.hasSuffix(".json"),
+        guard (snapshotID.hasPrefix("records-") || snapshotID.hasPrefix("recovered-")),
+              snapshotID.hasSuffix(".json"),
               !snapshotID.contains("/"), !snapshotID.contains("\\") else {
             throw RecordStorageError.invalidBackup("无效备份名称")
         }
