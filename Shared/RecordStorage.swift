@@ -98,6 +98,7 @@ enum AppGroup {
 enum RecordStorageError: LocalizedError {
     case missingPreviousFile
     case sharedUnavailable(String)
+    case unexpectedDrop(previous: Int, actual: Int)
     case unreadable(String)
     case corrupt(String)
     case coordination(String)
@@ -109,6 +110,8 @@ enum RecordStorageError: LocalizedError {
             return "原记录文件意外消失，已阻止写入。请在「我的 › 自动备份与恢复」检查历史快照。"
         case let .sharedUnavailable(group):
             return "共享数据容器 \(group) 暂时不可访问。已停止写入，避免把记录存到另一个空目录。请在解锁设备后重试并查看诊断信息。"
+        case let .unexpectedDrop(previous, actual):
+            return "检测到记录数从 \(previous) 变为 \(actual)，可能读取了错误的容器。已禁止新保存，请先在「自动备份与恢复」检查旧记录。"
         case let .unreadable(reason):
             return "记录文件暂时无法读取，未进行写入：\(reason)"
         case let .corrupt(reason):
