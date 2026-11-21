@@ -40,19 +40,26 @@ enum AppGroup {
         return []
     }()
 
+    /// 一个证书可能授权多个 group。首个可访问 group 不是稳定身份：
+    /// 它会随着重启后的容器挂载状态或重签名工具改写 Info.plist 而变化。
+    /// 在可解析描述文件时始终固定到同一个「字典序最小」的 group，
+    /// 即使它临时不可用也绝不悄悄切到另一个空目录。
+    static func preferredIdentifier(configured: String, declaredGroups: [String]) -> String {
+        let groups = declaredGroups.filter { $0.hasPrefix("group.") }
+        return groups.sorted().first ?? configured
+    }
+
     private static func resolveIdentifier() -> String {
-        let configured = configuredIdentifier
-        let fm = FileManager.default
-        // 优先：Info.plist 里配置的，且确实可用
-        if profileGroups.isEmpty || profileGroups.contains(configured),
-           fm.containerURL(forSecurityApplicationGroupIdentifier: configured) != nil {
-            return configured
-        }
-        // 其次：描述文件里的 group，按名字排序后取第一个可用的（App 和小组件结果一致）
-        for g in profileGroups.sorted() where fm.containerURL(forSecurityApplicationGroupIdentifier: g) != nil {
-            return g
-        }
-        return configured
+        preferredIdentifier(configured: configuredIdentifier, declaredGroups: profileGroups)
+    }
+
+    /// 既供用户诊断，也供主 App 从其他已授权容器安全合并旧记录。
+    static var candidateGroups: [String] {
+        Array(Set(profileGroups + [configuredIdentifier])).sorted()
+    }
+
+    static var expectedSharedButUnavailable: Bool {
+        !profileGroups.isEmpty && !isShared
     }
 
     /// 先看主 App 的描述文件（App 和小组件读同一份，选出的 group 一定相同），再看自己的
@@ -90,6 +97,7 @@ enum AppGroup {
 /// App/Widget 都必须在读取、协调、备份和写入成功后才能报告保存成功。
 enum RecordStorageError: LocalizedError {
     case missingPreviousFile
+    case sharedUnavailable(String)
     case unreadable(String)
     case corrupt(String)
     case coordination(String)
@@ -98,7 +106,9 @@ enum RecordStorageError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingPreviousFile:
-            return "原记录文件意外消失，已阻止写入。请在「我的 › 自动备份」检查历史快照。"
+            return "原记录文件意外消失，已阻止写入。请在「我的 › 自动备份与恢复」检查历史快照。"
+        case let .sharedUnavailable(group):
+            return "共享数据容器 \(group) 暂时不可访问。已停止写入，避免把记录存到另一个空目录。请在解锁设备后重试并查看诊断信息。"
         case let .unreadable(reason):
             return "记录文件暂时无法读取，未进行写入：\(reason)"
         case let .corrupt(reason):
@@ -144,6 +154,93 @@ enum RecordStorage {
     private static var backupsURL: URL { directory.appendingPathComponent("Backups", isDirectory: true) }
     private static var markerURL: URL { directory.appendingPathComponent(".records-initialized") }
     private static let maximumSnapshots = 40
+
+    /// App Group 有签名声明却暂时无法挂载时，严禁退回沙盒私有目录。
+    private static func requireStorage() throws {
+        if AppGroup.expectedSharedButUnavailable {
+            throw RecordStorageError.sharedUnavailable(AppGroup.identifier)
+        }
+    }
+
+    /// 启动时检测同一签名授权的其他 App Group 里是否有这款 App 的记录。
+    /// 只做「按 UUID 补齐」，不会移动/删除其他组中的原文件；新旧签名选错
+    /// Group 时仍可以重新找到数据，且不必破坏历史快照。
+    static func mergeOtherGroupsIfNeeded() throws -> Int {
+        try requireStorage()
+        guard AppGroup.isShared else { return 0 }
+        var merged = 0
+        var errors: [String] = []
+        var known = Set(try load().map(\.id))
+        let fm = FileManager.default
+
+        for group in AppGroup.candidateGroups where group != AppGroup.identifier {
+            guard let container = fm.containerURL(forSecurityApplicationGroupIdentifier: group) else { continue }
+            let source = container.appendingPathComponent("Pupudiary/records.json")
+            guard fm.fileExists(atPath: source.path) else { continue }
+            do {
+                var rows: [PoopRecord]?
+                var readFailure: Error?
+                var coordinatorFailure: NSError?
+                NSFileCoordinator().coordinate(readingItemAt: source, options: [], error: &coordinatorFailure) { safeURL in
+                    do { rows = try read(at: safeURL).records }
+                    catch { readFailure = error }
+                }
+                if let coordinatorFailure { throw RecordStorageError.coordination(coordinatorFailure.localizedDescription) }
+                if let readFailure { throw readFailure }
+                guard let rows else { throw RecordStorageError.coordination("旧容器未返回记录") }
+                let missing = rows.filter { !known.contains($0.id) }
+                if missing.isEmpty { continue }
+                let saved = try mutate { list in
+                    var ids = Set(list.map(\.id))
+                    for record in missing where ids.insert(record.id).inserted {
+                        list.append(record)
+                    }
+                }
+                let latest = Set(saved.map(\.id))
+                merged += missing.filter { latest.contains($0.id) }.count
+                known = latest
+            } catch {
+                errors.append("\(group): \(error.localizedDescription)")
+            }
+        }
+        if !errors.isEmpty {
+            throw RecordStorageError.unreadable("其他 App Group 中的记录尚未合并：\(errors.joined(separator: "; "))")
+        }
+        return merged
+    }
+
+    /// 只读检查：能直接显示当前进程使用的 group，以及其他容器中的文件大小、
+    /// 记录数、历史快照数。不能解码时明确注明，绝不显示为「0 条」。
+    static func storageSurvey() -> [String] {
+        let fm = FileManager.default
+        var lines = [
+            "configured=\(AppGroup.configuredIdentifier) selected=\(AppGroup.identifier) shared=\(AppGroup.isShared)",
+            "已授权 groups=\(AppGroup.profileGroups.sorted().joined(separator: ","))"
+        ]
+        for group in AppGroup.candidateGroups {
+            guard let base = fm.containerURL(forSecurityApplicationGroupIdentifier: group) else {
+                lines.append("\(group) | 无访问权限")
+                continue
+            }
+            let dir = base.appendingPathComponent("Pupudiary", isDirectory: true)
+            let url = dir.appendingPathComponent("records.json")
+            let backups = dir.appendingPathComponent("Backups", isDirectory: true)
+            let backupCount = (try? fm.contentsOfDirectory(atPath: backups.path))?
+                .filter { $0.hasPrefix("records-") && $0.hasSuffix(".json") }.count ?? 0
+            if !fm.fileExists(atPath: url.path) {
+                lines.append("\(group) | 无 records.json | 快照 \(backupCount)")
+                continue
+            }
+            let bytes = (try? fm.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? -1
+            do {
+                let records = try read(at: url).records
+                lines.append("\(group) | \(bytes) B | \(records.count) 条 | 快照 \(backupCount)")
+            } catch {
+                lines.append("\(group) | \(bytes) B | 读取失败: \(error.localizedDescription) | 快照 \(backupCount)")
+            }
+        }
+        return lines
+    }
 
     /// 旧版本在 App 私有目录中的文件仅在成功合并后才改名，不允许无声丢弃。
     static func migrateLocalDataIfNeeded() throws {
@@ -216,6 +313,7 @@ enum RecordStorage {
 
     /// 读取失败不会再显示为「零条记录」。
     static func load() throws -> [PoopRecord] {
+        try requireStorage()
         let url = fileURL
         if !FileManager.default.fileExists(atPath: url.path) {
             return try read(at: url).records
@@ -245,6 +343,7 @@ enum RecordStorage {
         _ change: (inout [PoopRecord]) -> Void,
         allowRepair: Bool
     ) throws -> [PoopRecord] {
+        try requireStorage()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var result: [PoopRecord]?
         var writeError: Error?
