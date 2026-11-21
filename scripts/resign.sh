@@ -59,7 +59,18 @@ APP_WILDCARD=false
 if $PB -c 'Print :Entitlements:application-identifier' "$WORK/app.plist" | grep -q '\*'; then APP_WILDCARD=true; fi
 echo "📦 App Bundle ID：$APP_ID"
 
-GROUP="$($PB -c 'Print :Entitlements:com.apple.security.application-groups:0' "$WORK/app.plist" 2>/dev/null || true)"
+# 与运行时一致：使用签名授权列表中按名称排序后的首个 group，
+# 不能使用 plist 数组的第一个元素，否则重签名会把 .1 意外改成 .5。
+GROUP="$(python3 - "$WORK/app.plist" <<'PY'
+import plistlib
+import sys
+with open(sys.argv[1], "rb") as f:
+    profile = plistlib.load(f)
+groups = profile.get("Entitlements", {}).get("com.apple.security.application-groups", [])
+groups = sorted(group for group in groups if group.startswith("group."))
+print(groups[0] if groups else "")
+PY
+)"
 if [ -n "$GROUP" ]; then
   echo "👥 App Group：$GROUP"
 else
@@ -89,6 +100,17 @@ if [ -d "$APPEX" ]; then
   fi
   if [ -d "$APPEX" ]; then
     [ -n "$GROUP" ] || $PB -c 'Delete :com.apple.security.application-groups' "$WORK/widget.ent.plist" 2>/dev/null || true
+    if [ -n "$GROUP" ]; then
+      python3 - "$WORK/widget.ent.plist" "$GROUP" <<'PY'
+import plistlib
+import sys
+with open(sys.argv[1], "rb") as f:
+    entitlements = plistlib.load(f)
+groups = entitlements.get("com.apple.security.application-groups", [])
+if sys.argv[2] not in groups:
+    sys.exit("❌ Widget 签名未授权主 App 使用的 Group：" + sys.argv[2])
+PY
+    fi
     set_info "$APPEX/Info.plist" "$W_ID"
     codesign -f -s "$IDENTITY" --keychain "$KEYCHAIN" --entitlements "$WORK/widget.ent.plist" "$APPEX"
     echo "🧩 小组件已签名：$W_ID"

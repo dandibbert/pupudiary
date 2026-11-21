@@ -8,15 +8,26 @@ final class RecordStore {
     private(set) var records: [PoopRecord] = []
     private var loadedAt: TimeInterval = 0
     var storageError: String?
+    private(set) var hasUnexpectedRecordDrop = false
+    private let confirmedCountKey = "pupudiary.lastConfirmedRecordCount"
 
     init() {
         CrashCatcher.install()
         DiagLog.log("App 启动 \(DiagLog.environmentSummary)")
-        var migrationFailure: Error?
+        var startupFailures: [String] = []
         do { try RecordStorage.migrateLocalDataIfNeeded() }
-        catch { migrationFailure = error }
+        catch { startupFailures.append(error.localizedDescription) }
+        do {
+            let merged = try RecordStorage.mergeOtherGroupsIfNeeded()
+            if merged > 0 { DiagLog.log("自动找到其他 App Group 中的 \(merged) 条旧记录并安全合并") }
+        } catch {
+            startupFailures.append(error.localizedDescription)
+        }
         reload()
-        if let migrationFailure { report(migrationFailure) }
+        if !startupFailures.isEmpty {
+            storageError = startupFailures.joined(separator: "\n")
+            DiagLog.log("‼️ 启动迁移提示：\(storageError ?? "")")
+        }
     }
 
     var stats: GutStats { GutStats(records: records) }
@@ -24,8 +35,16 @@ final class RecordStore {
     func reload() {
         do {
             let latest = try RecordStorage.load()
+            let previousCount = UserDefaults.standard.integer(forKey: confirmedCountKey)
+            guard latest.count >= previousCount else {
+                hasUnexpectedRecordDrop = true
+                report(RecordStorageError.unexpectedDrop(previous: previousCount, actual: latest.count))
+                return
+            }
             records = latest
             loadedAt = RecordStorage.lastChange
+            UserDefaults.standard.set(latest.count, forKey: confirmedCountKey)
+            hasUnexpectedRecordDrop = false
             storageError = nil
         } catch {
             // 绝不把磁盘读取失败当成空记录，也不覆盖当前视图里的旧内容。
@@ -34,12 +53,23 @@ final class RecordStore {
     }
 
     func reloadIfNeeded() {
-        if RecordStorage.lastChange != loadedAt || storageError != nil {
-            reload()
-        }
+        // 不能依赖一个可能来自错误 App Group 的 lastChange 值；
+        // 回到前台总是重新核对数据，尤其是 iPhone 刚解锁/重启后。
+        reload()
     }
 
     func dismissStorageError() { storageError = nil }
+
+    /// 只有用户明确确认不再恢复历史数据时，才允许从较小的数据集继续。
+    func acceptCurrentRecordsAsNewBaseline() {
+        guard hasUnexpectedRecordDrop else { return }
+        do {
+            let actual = try RecordStorage.load()
+            UserDefaults.standard.set(actual.count, forKey: confirmedCountKey)
+            hasUnexpectedRecordDrop = false
+            reload()
+        } catch { report(error) }
+    }
 
     @discardableResult
     func quickLog(_ type: BristolType? = nil) -> PoopRecord? {
@@ -93,9 +123,18 @@ final class RecordStore {
 
     private func apply(_ change: (inout [PoopRecord]) -> Void) -> Bool {
         do {
+            let latest = try RecordStorage.load()
+            let expected = UserDefaults.standard.integer(forKey: confirmedCountKey)
+            guard latest.count >= expected else {
+                hasUnexpectedRecordDrop = true
+                report(RecordStorageError.unexpectedDrop(previous: expected, actual: latest.count))
+                return false
+            }
             let updated = try RecordStorage.mutate(change)
             records = updated
             loadedAt = RecordStorage.lastChange
+            UserDefaults.standard.set(updated.count, forKey: confirmedCountKey)
+            hasUnexpectedRecordDrop = false
             storageError = nil
             return true
         } catch {

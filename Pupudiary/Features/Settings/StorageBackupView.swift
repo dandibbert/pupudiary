@@ -8,6 +8,7 @@ struct StorageBackupView: View {
     @State private var selected: RecordSnapshot?
     @State private var resultMessage: String?
     @State private var loadError: String?
+    @State private var confirmFreshStart = false
 
     var body: some View {
         ScrollView {
@@ -22,6 +23,21 @@ struct StorageBackupView: View {
                         .foregroundStyle(Theme.warning)
                 }
                 .cardStyle()
+
+                if store.hasUnexpectedRecordDrop {
+                    VStack(alignment: .leading, spacing: 10) {
+                        SectionTitle(title: "记录数量异常", symbol: "exclamationmark.triangle.fill")
+                        Text("App 发现记录数量意外减少。为保护旧数据，已停止新保存。建议先检查下方历史快照和「诊断信息」中的其他 App Group。")
+                            .font(.cute(13, .medium))
+                            .foregroundStyle(Theme.warning)
+                        Button("我确认无需恢复，允许从当前记录重新开始") {
+                            confirmFreshStart = true
+                        }
+                        .font(.cute(13, .bold))
+                        .foregroundStyle(Theme.warning)
+                    }
+                    .cardStyle()
+                }
 
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
@@ -82,6 +98,17 @@ struct StorageBackupView: View {
             Button("取消", role: .cancel) { selected = nil }
         } message: {
             Text("只补回当前没有的记录，现有记录不会被删除或覆盖。如果当前数据损坏，会先隔离原始损坏文件。")
+        }
+        .confirmationDialog("确认放弃寻找旧记录？", isPresented: $confirmFreshStart, titleVisibility: .visible) {
+            Button("从当前数据继续记录", role: .destructive) {
+                store.acceptCurrentRecordsAsNewBaseline()
+                resultMessage = store.hasUnexpectedRecordDrop
+                    ? "尚未完成重置，请检查存储错误。"
+                    : "已允许从当前记录继续使用。"
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("此操作不删除现有文件或历史快照，但可能使你错过恢复旧记录的机会。")
         }
         .alert("备份操作", isPresented: Binding(
             get: { resultMessage != nil },

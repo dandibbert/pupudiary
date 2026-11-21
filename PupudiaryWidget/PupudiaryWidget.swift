@@ -47,6 +47,10 @@ struct PoopEntry: TimelineEntry {
             records = []
             DiagLog.log("‼️ 小组件读取失败（未显示零记录）：\(error.localizedDescription)")
         }
+        if !failed && RecordStorage.hasUnmergedAlternateRecords(comparedTo: records) {
+            failed = true
+            DiagLog.log("‼️ 小组件发现其他 App Group 还有未合并记录，请打开主 App")
+        }
         let stats = GutStats(records: records, now: date)
         return PoopEntry(date: date,
                          todayCount: stats.today.count,
