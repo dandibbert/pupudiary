@@ -12,11 +12,20 @@ final class RecordStore {
     init() {
         CrashCatcher.install()
         DiagLog.log("App 启动 \(DiagLog.environmentSummary)")
-        var migrationFailure: Error?
+        var startupFailures: [String] = []
         do { try RecordStorage.migrateLocalDataIfNeeded() }
-        catch { migrationFailure = error }
+        catch { startupFailures.append(error.localizedDescription) }
+        do {
+            let merged = try RecordStorage.mergeOtherGroupsIfNeeded()
+            if merged > 0 { DiagLog.log("自动找到其他 App Group 中的 \(merged) 条旧记录并安全合并") }
+        } catch {
+            startupFailures.append(error.localizedDescription)
+        }
         reload()
-        if let migrationFailure { report(migrationFailure) }
+        if !startupFailures.isEmpty {
+            storageError = startupFailures.joined(separator: "\n")
+            DiagLog.log("‼️ 启动迁移提示：\(storageError ?? "")")
+        }
     }
 
     var stats: GutStats { GutStats(records: records) }
