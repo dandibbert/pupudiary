@@ -53,9 +53,9 @@ final class RecordStore {
     }
 
     func reloadIfNeeded() {
-        if RecordStorage.lastChange != loadedAt || storageError != nil {
-            reload()
-        }
+        // 不能依赖一个可能来自错误 App Group 的 lastChange 值；
+        // 回到前台总是重新核对数据，尤其是 iPhone 刚解锁/重启后。
+        reload()
     }
 
     func dismissStorageError() { storageError = nil }
