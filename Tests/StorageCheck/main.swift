@@ -9,6 +9,23 @@ func check(_ condition: Bool, _ label: String) {
     print("✅ \(label)")
 }
 
+// 事故复现：描述文件顺序是 .5,.4,.1；旧 App 选 .1，重签脚本选 .5。
+// 选择必须仅由完整授权集合决定，不能由 Info.plist 或容器瞬时可访问状态决定。
+let groups = [
+    "group.a4cb01159be1f588.5",
+    "group.a4cb01159be1f588.4",
+    "group.a4cb01159be1f588.1",
+    "group.a4cb01159be1f588.3",
+    "group.a4cb01159be1f588.2"
+]
+let preferred = "group.a4cb01159be1f588.1"
+check(AppGroup.preferredIdentifier(configured: "group.a4cb01159be1f588.5", declaredGroups: groups) == preferred,
+      "重签名修改 Info.plist 后仍选原来的 .1")
+check(AppGroup.preferredIdentifier(configured: "group.com.pupudiary.app", declaredGroups: groups.reversed()) == preferred,
+      "授权列表重新排序不改变数据容器")
+check(AppGroup.preferredIdentifier(configured: "group.personal", declaredGroups: []) == "group.personal",
+      "没有描述文件时保留已配置的组")
+
 let fm = FileManager.default
 let root = fm.temporaryDirectory.appendingPathComponent("pupudiary-storage-\(UUID().uuidString)", isDirectory: true)
 defer { try? fm.removeItem(at: root) }
