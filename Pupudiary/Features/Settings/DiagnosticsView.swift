@@ -235,6 +235,8 @@ struct DiagReport {
         // App Group
         lines.append("== App Group ==")
         lines.append("使用=\(AppGroup.identifier) shared=\(AppGroup.isShared) 描述文件中=\(AppGroup.profileGroups.joined(separator: ","))")
+        lines.append("== 数据容器只读检查 ==")
+        lines.append(contentsOf: RecordStorage.storageSurvey())
 
         // 系统登记
         lines.append("== 系统登记 ==")
