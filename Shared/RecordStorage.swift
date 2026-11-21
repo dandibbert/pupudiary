@@ -155,9 +155,13 @@ enum RecordStorage {
     private static var markerURL: URL { directory.appendingPathComponent(".records-initialized") }
     private static let maximumSnapshots = 40
 
-    /// App Group 有签名声明却暂时无法挂载时，严禁退回沙盒私有目录。
+    /// 无法访问声明的共享容器时绝不改写另一套私有数据库。
+    /// 仅独立回归测试可指定临时目录。
     private static func requireStorage() throws {
-        if AppGroup.expectedSharedButUnavailable {
+        #if DEBUG
+        if testDirectory != nil { return }
+        #endif
+        guard AppGroup.isShared else {
             throw RecordStorageError.sharedUnavailable(AppGroup.identifier)
         }
     }
