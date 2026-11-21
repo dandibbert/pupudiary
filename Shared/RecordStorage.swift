@@ -177,8 +177,7 @@ enum RecordStorage {
         var known = Set(try load().map(\.id))
         let fm = FileManager.default
         do {
-            let copied = try preserveAlternateSnapshots()
-            if copied > 0 { DiagLog.log("从其他授权 App Group 保留了 \(copied) 份历史快照") }
+            _ = try preserveAlternateSnapshots()
         } catch {
             errors.append("迁移其他 Group 的历史快照失败：\(error.localizedDescription)")
         }
