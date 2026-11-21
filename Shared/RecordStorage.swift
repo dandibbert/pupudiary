@@ -225,6 +225,21 @@ enum RecordStorage {
         return merged
     }
 
+    /// 小组件只读检测：其他已授权 group 中可能还留有未合并记录。
+    /// 这种情况下不要将一个不完整的数据集冒充「全部记录」。
+    static func hasUnmergedAlternateRecords(comparedTo records: [PoopRecord]) -> Bool {
+        let known = Set(records.map(\.id))
+        let fm = FileManager.default
+        for group in AppGroup.candidateGroups where group != AppGroup.identifier {
+            guard let base = fm.containerURL(forSecurityApplicationGroupIdentifier: group) else { continue }
+            let path = base.appendingPathComponent("Pupudiary/records.json")
+            guard let bytes = try? Data(contentsOf: path),
+                  let other = try? decoder.decode([PoopRecord].self, from: bytes) else { continue }
+            if other.contains(where: { !known.contains($0.id) }) { return true }
+        }
+        return false
+    }
+
     /// 将其他已授权 App Group 中的旧快照复制到当前目录，保留其原始文件。
     /// 单独使用 recovered- 前缀，不受「最近 40 次自动写入快照」清理策略影响。
     private static func preserveAlternateSnapshots() throws -> Int {
