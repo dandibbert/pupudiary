@@ -14,8 +14,11 @@ enum AppGroup {
     /// 当前是否真的在使用共享容器
     static var isShared: Bool { sharedContainer != nil }
 
-    private static let sharedContainer: URL? =
+    /// iOS 刚重启、文件保护尚未解锁时共享容器可能暂时不可访问。
+    /// 不能用 static let 缓存一次 nil，否则整个进程都会误以为没有 App Group。
+    private static var sharedContainer: URL? {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier)
+    }
 
     /// 共享容器；没有可用的 App Group 时退回到自己的目录
     static var containerURL: URL { sharedContainer ?? localContainer }
@@ -24,8 +27,9 @@ enum AppGroup {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
     }
 
-    static let defaults: UserDefaults =
+    static var defaults: UserDefaults {
         (isShared ? UserDefaults(suiteName: identifier) : nil) ?? .standard
+    }
 
     /// Info.plist 里写的（Xcode / resign.sh 编译时的值）
     static var configuredIdentifier: String {
