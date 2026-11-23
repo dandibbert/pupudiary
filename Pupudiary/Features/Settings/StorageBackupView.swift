@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 自动快照保存在现有 App Group 的 Pupudiary/Backups 目录。
+/// 实际快照同时保存在共享 App Group 和当前进程私有容器，并搜索其他授权 App Group。
 /// 恢复只补回缺失的 ID，不会覆盖或删除当前记录。
 struct StorageBackupView: View {
     @Environment(RecordStore.self) private var store
@@ -15,10 +15,10 @@ struct StorageBackupView: View {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 10) {
                     SectionTitle(title: "自动保护", symbol: "externaldrive.fill")
-                    Text("每次成功保存前，都会把原始 records.json 备份一份，最多保留最近 40 份。保存失败不会覆盖旧数据。")
+                    Text("从第一次保存开始，先把完整记录写入备份并校验，再更新 records.json。共享容器和本 App 私有容器各保留最多 40 份快照。")
                         .font(.cute(13, .medium))
                         .foregroundStyle(Theme.subtle)
-                    Text("自动备份只在本机 App Group 内。卸载 App 或更换签名、App Group 前，仍应在「导出记录」生成 JSON 备份并保存到其他位置。")
+                    Text("这两份备份都仍在本机，卸载或改动 Bundle ID 时也可能一起丢失。请定期用「导出记录」保存 JSON 到 iCloud Drive 或电脑。")
                         .font(.cute(12, .medium))
                         .foregroundStyle(Theme.warning)
                 }
@@ -52,7 +52,7 @@ struct StorageBackupView: View {
                             .font(.cute(13, .medium))
                             .foregroundStyle(Theme.warning)
                     } else if snapshots.isEmpty {
-                        Text("暂无历史快照。首次保存只创建数据文件；下一次成功保存前会自动保留上一版。")
+                        Text("目前扫描到 0 份可解码的快照。这里无法仅凭记忆中的记录数量恢复内容；请先查看「诊断信息」中的所有 App Group。新版从首次成功写入就应出现快照。")
                             .font(.cute(13, .medium))
                             .foregroundStyle(Theme.subtle)
                     } else {
@@ -62,7 +62,7 @@ struct StorageBackupView: View {
                                     Text(item.createdAt.formatted(.dateTime.year().month().day().hour().minute().second()))
                                         .font(.cute(14, .bold))
                                         .foregroundStyle(Theme.ink)
-                                    Text("\(item.count) 条记录")
+                                    Text("\(item.count) 条记录 · \(item.source)")
                                         .font(.cute(12, .medium))
                                         .foregroundStyle(Theme.subtle)
                                 }
