@@ -37,6 +37,11 @@ let second = PoopRecord(timestamp: Date(timeIntervalSince1970: 1_760_100_000), b
 
 _ = try RecordStorage.mutate { $0.append(first) }
 check((try RecordStorage.load()).count == 1, "首次写入后可读取一条")
+let firstSnapshots = try RecordStorage.snapshots()
+check(firstSnapshots.contains(where: { $0.count == 1 && $0.source == "当前 App Group" }),
+      "首次保存即产生共享数据完整快照")
+check(firstSnapshots.contains(where: { $0.count == 1 && $0.source == "本 App 私有备份" }),
+      "首次保存即产生独立私有数据快照")
 _ = try RecordStorage.mutate { $0.append(second) }
 check((try RecordStorage.load()).count == 2, "再次写入保留旧数据")
 let snapshots = try RecordStorage.snapshots()
@@ -75,6 +80,7 @@ RecordStorage.testDirectory = root2
 _ = try RecordStorage.mutate { $0.append(first) }
 let prior = try Data(contentsOf: RecordStorage.fileURL)
 let blocker = root2.appendingPathComponent("Backups")
+try fm.removeItem(at: blocker)
 try Data("not a directory".utf8).write(to: blocker)
 do {
     _ = try RecordStorage.mutate { $0.append(second) }
@@ -83,4 +89,22 @@ do {
     check(true, "备份失败抛出异常")
 }
 check(try Data(contentsOf: RecordStorage.fileURL) == prior, "备份失败也不修改主文件")
+// 故障复现：当前 Group 和主库一起消失，但 App 私有备份仍可恢复。
+let root3 = fm.temporaryDirectory.appendingPathComponent("pupudiary-mirror-\(UUID().uuidString)")
+defer { try? fm.removeItem(at: root3) }
+RecordStorage.testDirectory = root3
+_ = try RecordStorage.mutate { $0.append(first) }
+try fm.removeItem(at: root3.appendingPathComponent("Backups"))
+try fm.removeItem(at: RecordStorage.fileURL)
+let privateOnly = try RecordStorage.snapshots().filter { $0.source == "本 App 私有备份" }
+check(privateOnly.count == 1 && privateOnly[0].count == 1, "共享容器丢失后仍能发现私有备份")
+do {
+    _ = try RecordStorage.mutate { $0.append(second) }
+    check(false, "主文件意外消失且私有备份存在时应阻止新写入")
+} catch {
+    check(error is RecordStorageError, "已有备份时主文件意外消失会报错")
+}
+let privateRecovered = try RecordStorage.restoreMissingRecords(from: privateOnly[0].id)
+check(privateRecovered == 1 && (try RecordStorage.load()).count == 1, "能从私有备份恢复丢失记录")
+
 print("🎉 JSON 存储安全测试通过")
