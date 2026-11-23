@@ -283,6 +283,25 @@ enum RecordStorage {
             "configured=\(AppGroup.configuredIdentifier) selected=\(AppGroup.identifier) shared=\(AppGroup.isShared)",
             "已授权 groups=\(AppGroup.profileGroups.sorted().joined(separator: ","))"
         ]
+        // App 私有容器在重签或 Group 切换后可能仍然保有副本。
+        let privateFolder = AppGroup.localContainer.appendingPathComponent("Pupudiary", isDirectory: true)
+        let privateRecord = privateFolder.appendingPathComponent("records.json")
+        let privateMigrated = privateFolder.appendingPathComponent("records.json.migrated")
+        for (label, file) in [("私有 records.json", privateRecord), ("旧迁移文件", privateMigrated)] {
+            if fm.fileExists(atPath: file.path) {
+                let size = (try? fm.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.intValue ?? -1
+                if let bytes = try? Data(contentsOf: file),
+                   let records = try? decoder.decode([PoopRecord].self, from: bytes) {
+                    lines.append("\(label) | \(size) B | \(records.count) 条")
+                } else {
+                    lines.append("\(label) | \(size) B | 文件存在但无法解析")
+                }
+            }
+        }
+        let privateSnapshots = (try? fm.contentsOfDirectory(atPath: privateBackupsURL.path))?
+            .filter { $0.hasPrefix("records-") && $0.hasSuffix(".json") }.count ?? 0
+        lines.append("App 私有备份 | \(privateSnapshots) 份")
+
         for group in AppGroup.candidateGroups {
             guard let base = fm.containerURL(forSecurityApplicationGroupIdentifier: group) else {
                 lines.append("\(group) | 无访问权限")
