@@ -105,6 +105,7 @@ do {
     check(error is RecordStorageError, "已有备份时主文件意外消失会报错")
 }
 let privateRecovered = try RecordStorage.restoreMissingRecords(from: privateOnly[0].id)
-check(privateRecovered == 1 && (try RecordStorage.load()).count == 1, "能从私有备份恢复丢失记录")
+let privateRecoveredCount = try RecordStorage.load().count
+check(privateRecovered == 1 && privateRecoveredCount == 1, "能从私有备份恢复丢失记录")
 
 print("🎉 JSON 存储安全测试通过")
