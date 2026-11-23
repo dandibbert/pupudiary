@@ -139,8 +139,11 @@ struct RecordSnapshot: Identifiable {
     let url: URL
     let createdAt: Date
     let count: Int
+    let source: String
 
-    var id: String { url.lastPathComponent }
+    /// The full *enumerated* URL avoids name collisions between backup containers.
+    /// Restoration never accepts arbitrary paths; it resolves IDs against snapshots().
+    var id: String { url.standardizedFileURL.path }
 }
 
 /// 保留原有的 App Group 与 Pupudiary/records.json 路径，兼容已安装的 Claude 版。
@@ -159,6 +162,14 @@ enum RecordStorage {
 
     static var fileURL: URL { directory.appendingPathComponent("records.json") }
     private static var backupsURL: URL { directory.appendingPathComponent("Backups", isDirectory: true) }
+    private static var privateBackupsURL: URL {
+        #if DEBUG
+        if let testDirectory { return testDirectory.appendingPathComponent("PrivateBackups", isDirectory: true) }
+        #endif
+        return AppGroup.localContainer
+            .appendingPathComponent("Pupudiary", isDirectory: true)
+            .appendingPathComponent("Backups", isDirectory: true)
+    }
     private static var markerURL: URL { directory.appendingPathComponent(".records-initialized") }
     private static let maximumSnapshots = 40
 
@@ -418,7 +429,7 @@ enum RecordStorage {
                         // 用户显式选择恢复时也先隔离损坏文件，不直接丢弃任何原始字节。
                         if FileManager.default.fileExists(atPath: target.path) {
                             let damaged = try Data(contentsOf: target)
-                            try saveCopy(damaged, prefix: "damaged")
+                            try saveCopy(damaged, prefix: "damaged", in: backupsURL)
                         }
                         records = []
                         original = nil
@@ -427,13 +438,20 @@ enum RecordStorage {
                     change(&records)
                     records.sort { $0.timestamp > $1.timestamp }
                     let encoded = try encoder.encode(records)
-                    // 必须先成功保留旧数据；备份失败时绝不碰原文件。
-                    if let original { try saveCopy(original, prefix: "records") }
+                    // 将本次要保存的完整记录也持久化：第一次保存就有可恢复副本。
+                    // 两个容器全部保存成功后才改写主文件（避免“备份失败仍覆盖主库”）。
+                    // 与主文件相同的 App Group 备份供小组件使用；App 私有备份
+                    // 可防重签/Group 切换造成的“当前 Group 0 份快照”。
+                    // 旧记录也多保留一份，以支持从意外删减中恢复。
+                    if let original { try saveCopy(original, prefix: "records", in: backupsURL) }
+                    try saveCopy(encoded, prefix: "records", in: backupsURL)
+                    try saveCopy(encoded, prefix: "records", in: privateBackupsURL)
                     try encoded.write(to: target, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
                     result = records
-                    // 仅记录提交后的附属清理可失败，不允许清理失败伪装成保存失败。
+                    // 主文件已成功提交，清理失败不影响报告成功。
                     try? "1".write(to: markerURL, atomically: true, encoding: .utf8)
-                    pruneSnapshots()
+                    pruneSnapshots(in: backupsURL)
+                    pruneSnapshots(in: privateBackupsURL)
                 } catch {
                     writeError = error
                 }
@@ -447,54 +465,84 @@ enum RecordStorage {
         return result
     }
 
-    private static func saveCopy(_ bytes: Data, prefix: String) throws {
-        try FileManager.default.createDirectory(at: backupsURL, withIntermediateDirectories: true)
+    private static func saveCopy(_ bytes: Data, prefix: String, in folder: URL) throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let timestamp = ISO8601DateFormatter().string(from: Date())
         let name = "\(prefix)-\(timestamp)-\(UUID().uuidString).json"
-        try bytes.write(to: backupsURL.appendingPathComponent(name),
+        let target = folder.appendingPathComponent(name)
+        try bytes.write(to: target,
                         options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        // A snapshot is valid only if it can actually be read back and decoded.
+        do {
+            let confirmed = try Data(contentsOf: target)
+            if prefix != "damaged" { _ = try decoder.decode([PoopRecord].self, from: confirmed) }
+            guard confirmed == bytes else { throw RecordStorageError.invalidBackup("快照校验失败") }
+        } catch {
+            try? FileManager.default.removeItem(at: target)
+            throw RecordStorageError.invalidBackup("备份校验失败，未修改原文件：\(error.localizedDescription)")
+        }
     }
 
     private static func hasSnapshotFiles() -> Bool {
-        guard let names = try? FileManager.default.contentsOfDirectory(atPath: backupsURL.path) else { return false }
-        return names.contains { $0.hasPrefix("records-") && $0.hasSuffix(".json") }
+        for folder in [backupsURL, privateBackupsURL] {
+            guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else { continue }
+            if names.contains(where: { $0.hasPrefix("records-") && $0.hasSuffix(".json") }) {
+                return true
+            }
+        }
+        return false
     }
 
     /// 只修剪正常历史快照，永不自动删除 damaged- 原始抢救文件。
-    private static func pruneSnapshots() {
-        guard let names = try? FileManager.default.contentsOfDirectory(atPath: backupsURL.path) else { return }
+    private static func pruneSnapshots(in folder: URL) {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else { return }
         let snapshots = names.filter { $0.hasPrefix("records-") && $0.hasSuffix(".json") }.sorted(by: >)
         for name in snapshots.dropFirst(maximumSnapshots) {
-            try? FileManager.default.removeItem(at: backupsURL.appendingPathComponent(name))
+            try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
         }
     }
 
-    /// 每次正常保存前留一份快照，最多留最近 40 次。恢复只合并缺失的 ID。
+    /// 统一查找主 App Group、App 私有备份、其他已授权的 App Group。
+    /// 列表仅从实际存在且可以解码的文件生成；不能用整数计数冒充恢复能力。
     static func snapshots() throws -> [RecordSnapshot] {
-        guard FileManager.default.fileExists(atPath: backupsURL.path) else { return [] }
-        let urls = try FileManager.default.contentsOfDirectory(
-            at: backupsURL, includingPropertiesForKeys: [.contentModificationDateKey])
-        return urls.compactMap { url -> RecordSnapshot? in
-            guard (url.lastPathComponent.hasPrefix("records-") || url.lastPathComponent.hasPrefix("recovered-")), url.pathExtension == "json",
-                  let data = try? Data(contentsOf: url),
-                  let rows = try? decoder.decode([PoopRecord].self, from: data),
-                  let date = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-            else { return nil }
-            return RecordSnapshot(url: url, createdAt: date, count: rows.count)
-        }.sorted { $0.createdAt > $1.createdAt }
+        let fm = FileManager.default
+        var locations: [(URL, String)] = [
+            (backupsURL, "当前 App Group"),
+            (privateBackupsURL, "本 App 私有备份")
+        ]
+        for group in AppGroup.candidateGroups where group != AppGroup.identifier {
+            guard let root = fm.containerURL(forSecurityApplicationGroupIdentifier: group) else { continue }
+            locations.append((root.appendingPathComponent("Pupudiary/Backups", isDirectory: true), group))
+        }
+        var knownPaths = Set<String>()
+        var result: [RecordSnapshot] = []
+        for (folder, source) in locations {
+            guard knownPaths.insert(folder.standardizedFileURL.path).inserted else { continue }
+            guard fm.fileExists(atPath: folder.path) else { continue }
+            let urls = try fm.contentsOfDirectory(at: folder,
+                includingPropertiesForKeys: [.contentModificationDateKey])
+            for url in urls {
+                guard (url.lastPathComponent.hasPrefix("records-") ||
+                       url.lastPathComponent.hasPrefix("recovered-")),
+                      url.pathExtension == "json",
+                      let bytes = try? Data(contentsOf: url),
+                      let rows = try? decoder.decode([PoopRecord].self, from: bytes),
+                      let date = try? url.resourceValues(
+                          forKeys: [.contentModificationDateKey]).contentModificationDate else { continue }
+                result.append(RecordSnapshot(url: url, createdAt: date, count: rows.count, source: source))
+            }
+        }
+        return result.sorted { $0.createdAt > $1.createdAt }
     }
 
-    /// 显式恢复：保留当前记录；若当前 JSON 损坏，先备份损坏原件再修复。
+    /// 通过 snapshots() 中已经验证的 URL 恢复，不允许用户输入任意绝对路径。
     @discardableResult
     static func restoreMissingRecords(from snapshotID: String) throws -> Int {
-        guard (snapshotID.hasPrefix("records-") || snapshotID.hasPrefix("recovered-")),
-              snapshotID.hasSuffix(".json"),
-              !snapshotID.contains("/"), !snapshotID.contains("\\") else {
-            throw RecordStorageError.invalidBackup("无效备份名称")
+        guard let selected = try snapshots().first(where: { $0.id == snapshotID }) else {
+            throw RecordStorageError.invalidBackup("快照不存在或已损坏")
         }
-        let source = backupsURL.appendingPathComponent(snapshotID)
         let data: Data
-        do { data = try Data(contentsOf: source) }
+        do { data = try Data(contentsOf: selected.url) }
         catch { throw RecordStorageError.invalidBackup(error.localizedDescription) }
         let incoming: [PoopRecord]
         do { incoming = try decoder.decode([PoopRecord].self, from: data) }
